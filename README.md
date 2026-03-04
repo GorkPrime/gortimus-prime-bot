@@ -1,5 +1,5 @@
-# Gorktimus-Bot
-Telegram and web-based token risk scoring engine using on-chain liquidity and wallet analysis.
+# Gorktimus Prime
+web-based token risk scoring engine using on-chain liquidity and wallet analysis.
 Prime Bot | Gorktimus Prime
 
 AI-powered meme coin intelligence and risk analysis terminal.
