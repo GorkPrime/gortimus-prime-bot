@@ -6,8 +6,9 @@
     "start": "node index.js"
   },
   "dependencies": {
+    "npm i axios"
     "node-telegram-bot-api": "^0.63.0",
     "sqlite3": "^5.1.6"
   }
 }
-npm i axios
+
