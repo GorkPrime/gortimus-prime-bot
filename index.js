@@ -3,7 +3,7 @@ const axios = require("axios");
 const sqlite3 = require("sqlite3").verbose();
 const path = require("path");
 
-const BOT_TOKEN = process.env.BOT_TOKEN;
+const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 
 const bot = new TelegramBot(BOT_TOKEN, { polling: true });
 const db = new sqlite3.Database("./gorktimus.db");
@@ -13,6 +13,7 @@ const INTRO_IMG = path.join(__dirname, "assets", "gorktimus_intro_1280.png");
 
 // ===================== MEMORY =====================
 const watchlist = new Map();
+const pendingAdd = new Map();
 
 // ===================== DATABASE =====================
 db.serialize(() => {
@@ -42,21 +43,28 @@ function mainMenu() {
 
 // ===================== TERMINAL =====================
 async function sendTerminal(chatId, caption, reply_markup) {
+
   const payload = {};
   if (reply_markup) payload.reply_markup = reply_markup;
 
   try {
+
     await bot.sendPhoto(chatId, INTRO_IMG, {
       caption,
-      ...payload,
+      ...payload
     });
-  } catch (e) {
+
+  } catch (err) {
+
     await bot.sendMessage(chatId, caption, payload);
+
   }
+
 }
 
 // ===================== START =====================
 bot.onText(/\/start/, async (msg) => {
+
   const chatId = msg.chat.id;
 
   await sendTerminal(
@@ -64,6 +72,7 @@ bot.onText(/\/start/, async (msg) => {
     "🛡️ GORKTIMUS PRIME TERMINAL\nSelect an option below.",
     mainMenu()
   );
+
 });
 
 // ===================== BUTTON HANDLER =====================
@@ -73,8 +82,11 @@ bot.on("callback_query", async (query) => {
   const data = query.data;
 
   if (data === "add_watch") {
-    await bot.sendMessage(chatId, "Enter token symbol or address:");
+
     pendingAdd.set(chatId, true);
+
+    await bot.sendMessage(chatId, "Enter token symbol or address:");
+
   }
 
   if (data === "watchlist") {
@@ -94,23 +106,34 @@ bot.on("callback_query", async (query) => {
       "📋 Your Watchlist:\n\n" + tokens.join("\n"),
       mainMenu()
     );
+
   }
 
   if (data === "status") {
+
     await sendTerminal(
       chatId,
       "🟢 System Online\nScanner Active",
       mainMenu()
     );
+
+  }
+
+  if (data === "global_alerts") {
+
+    await sendTerminal(
+      chatId,
+      "🌍 Global alerts module coming soon.",
+      mainMenu()
+    );
+
   }
 
   bot.answerCallbackQuery(query.id);
 
 });
 
-// ===================== ADD TOKEN =====================
-const pendingAdd = new Map();
-
+// ===================== MESSAGE HANDLER =====================
 bot.on("message", async (msg) => {
 
   const chatId = msg.chat.id;
@@ -158,7 +181,9 @@ async function fetchToken(token) {
     };
 
   } catch (err) {
+
     return null;
+
   }
 
 }
@@ -175,8 +200,10 @@ async function scanWatchlist() {
     if (!data) continue;
 
     if (item.lastPrice === 0) {
+
       item.lastPrice = data.price;
       continue;
+
     }
 
     const change = ((data.price - item.lastPrice) / item.lastPrice) * 100;
