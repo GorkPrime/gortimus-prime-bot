@@ -4,14 +4,13 @@ const sqlite3 = require("sqlite3").verbose();
 const path = require("path");
 const fs = require("fs");
 
-// ================= ENV =================
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
+
 if (!BOT_TOKEN) {
   console.error("❌ TELEGRAM_BOT_TOKEN not set");
   process.exit(1);
 }
 
-// ================= BOT =================
 const bot = new TelegramBot(BOT_TOKEN, {
   polling: {
     autoStart: true,
@@ -20,17 +19,18 @@ const bot = new TelegramBot(BOT_TOKEN, {
   }
 });
 
-// ================= CONFIG =================
 const INTRO_IMG = path.join(__dirname, "assets", "gorktimus_intro_1280.png");
 const DB_PATH = "./gorktimus.db";
-const SCAN_INTERVAL_MS = 15000; // practical public-API speed
+
+const SCAN_INTERVAL_MS = 15000;
 const DEFAULT_ALERT_PCT = 3;
-const DEFAULT_COOLDOWN_SEC = 120;
 const DEFAULT_LIQ_ALERT_PCT = 10;
 const DEFAULT_TXN_DELTA = 5;
+const DEFAULT_COOLDOWN_SEC = 120;
 
-// ================= DB =================
 const db = new sqlite3.Database(DB_PATH);
+const pendingAction = new Map();
+let scanRunning = false;
 
 function run(sql, params = []) {
   return new Promise((resolve, reject) => {
@@ -97,18 +97,8 @@ async function initDb() {
   `);
 }
 
-// ================= STATE =================
-const pendingAction = new Map();
-let scanRunning = false;
-
-// ================= HELPERS =================
 function nowTs() {
   return Math.floor(Date.now() / 1000);
-}
-
-function isAddressLike(text) {
-  const t = String(text || "").trim();
-  return /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(t) || /^0x[a-fA-F0-9]{40}$/.test(t);
 }
 
 function num(value, fallback = 0) {
@@ -130,9 +120,14 @@ function shortUsd(n) {
   return `$${x.toFixed(8)}`;
 }
 
-function clip(text, len = 64) {
+function clip(text, len = 24) {
   const s = String(text || "");
   return s.length <= len ? s : `${s.slice(0, len - 1)}…`;
+}
+
+function isAddressLike(text) {
+  const t = String(text || "").trim();
+  return /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(t) || /^0x[a-fA-F0-9]{40}$/.test(t);
 }
 
 function mainMenu() {
@@ -148,8 +143,8 @@ function mainMenu() {
           { text: "📡 Status", callback_data: "status" }
         ],
         [
-          { text: "🔄 Refresh", callback_data: "refresh_menu" },
-          { text: "⚡ Scan Now", callback_data: "scan_now" }
+          { text: "⚡ Scan Now", callback_data: "scan_now" },
+          { text: "🔄 Refresh", callback_data: "refresh_menu" }
         ]
       ]
     }
@@ -158,15 +153,10 @@ function mainMenu() {
 
 function watchlistMenu(rows) {
   const buttons = rows.map((row) => ([
-    {
-      text: `❌ Remove ${row.base_symbol || row.query}`,
-      callback_data: `remove_watch:${row.id}`
-    }
+    { text: `❌ Remove ${row.base_symbol || row.query}`, callback_data: `remove_watch:${row.id}` }
   ]));
 
-  buttons.push([
-    { text: "⬅️ Main Menu", callback_data: "main_menu" }
-  ]);
+  buttons.push([{ text: "⬅️ Main Menu", callback_data: "main_menu" }]);
 
   return {
     reply_markup: {
@@ -227,6 +217,7 @@ async function resolveWatchTarget(query) {
         `https://api.dexscreener.com/token-pairs/v1/${chainGuess}/${encodeURIComponent(q)}`,
         { timeout: 15000 }
       );
+
       if (Array.isArray(byToken.data) && byToken.data.length) {
         pair = [...byToken.data].sort((a, b) => {
           const scoreA = num(a.liquidity?.usd) + num(a.volume?.h24);
@@ -234,35 +225,30 @@ async function resolveWatchTarget(query) {
           return scoreB - scoreA;
         })[0];
       }
-    } catch (e) {
-      // fall through to search
+    } catch (err) {
+      console.log("token-pairs lookup fallback:", err.message);
     }
   }
 
   if (!pair) {
-    const searchRes = await axios.get(
+    const res = await axios.get(
       `https://api.dexscreener.com/latest/dex/search?q=${encodeURIComponent(q)}`,
       { timeout: 15000 }
     );
 
-    const pairs = Array.isArray(searchRes.data?.pairs) ? searchRes.data.pairs : [];
+    const pairs = Array.isArray(res.data?.pairs) ? res.data.pairs : [];
     if (!pairs.length) return null;
 
-    pair = [...pairs]
-      .sort((a, b) => {
-        const exactA =
-          String(a.baseToken?.symbol || "").toLowerCase() === q.toLowerCase() ||
-          String(a.baseToken?.address || "").toLowerCase() === q.toLowerCase();
-        const exactB =
-          String(b.baseToken?.symbol || "").toLowerCase() === q.toLowerCase() ||
-          String(b.baseToken?.address || "").toLowerCase() === q.toLowerCase();
+    pair = [...pairs].sort((a, b) => {
+      const exactA = String(a.baseToken?.symbol || "").toLowerCase() === q.toLowerCase();
+      const exactB = String(b.baseToken?.symbol || "").toLowerCase() === q.toLowerCase();
 
-        if (exactA !== exactB) return exactB - exactA;
+      if (exactA !== exactB) return exactB - exactA;
 
-        const scoreA = num(a.liquidity?.usd) * 4 + num(a.volume?.h24) * 2 + num(a.marketCap);
-        const scoreB = num(b.liquidity?.usd) * 4 + num(b.volume?.h24) * 2 + num(b.marketCap);
-        return scoreB - scoreA;
-      })[0];
+      const scoreA = num(a.liquidity?.usd) * 4 + num(a.volume?.h24) * 2 + num(a.marketCap);
+      const scoreB = num(b.liquidity?.usd) * 4 + num(b.volume?.h24) * 2 + num(b.marketCap);
+      return scoreB - scoreA;
+    })[0];
   }
 
   if (!pair?.chainId || !pair?.pairAddress) return null;
@@ -325,31 +311,6 @@ async function fetchTopBoosted() {
   }
 }
 
-async function showWatchlist(chatId) {
-  const rows = await all(
-    `SELECT id, query, base_symbol, chain_id, pair_address, alert_pct, cooldown_sec, active
-     FROM watches
-     WHERE chat_id = ? AND active = 1
-     ORDER BY created_at DESC`,
-    [String(chatId)]
-  );
-
-  if (!rows.length) {
-    await sendTerminal(chatId, "📭 Watchlist empty.", mainMenu());
-    return;
-  }
-
-  const lines = rows.map((r, i) =>
-    `${i + 1}. ${r.base_symbol || r.query} | ${r.chain_id} | alert ${r.alert_pct}% | cooldown ${r.cooldown_sec}s`
-  );
-
-  await sendTerminal(
-    chatId,
-    `📋 Your Watchlist\n\n${lines.join("\n")}`,
-    watchlistMenu(rows)
-  );
-}
-
 async function addWatch(chatId, query) {
   const resolved = await resolveWatchTarget(query);
 
@@ -391,16 +352,50 @@ async function addWatch(chatId, query) {
 
     await sendTerminal(
       chatId,
-      `✅ Watch added\n\n${resolved.baseSymbol} (${resolved.baseName})\nChain: ${resolved.chainId}\nPrice: ${shortUsd(resolved.priceUsd)}\nLiquidity: ${shortUsd(resolved.liquidityUsd)}`,
+      `✅ Watch added
+
+${resolved.baseSymbol} (${resolved.baseName})
+Chain: ${resolved.chainId}
+Price: ${shortUsd(resolved.priceUsd)}
+Liquidity: ${shortUsd(resolved.liquidityUsd)}
+Buys m5: ${resolved.buysM5}
+Sells m5: ${resolved.sellsM5}`,
       mainMenu()
     );
   } catch (err) {
     if (String(err.message).includes("UNIQUE")) {
-      await bot.sendMessage(chatId, `⚠️ That pair is already in your watchlist.`);
+      await bot.sendMessage(chatId, "⚠️ That pair is already in your watchlist.");
       return;
     }
     throw err;
   }
+}
+
+async function showWatchlist(chatId) {
+  const rows = await all(
+    `SELECT id, query, base_symbol, chain_id, alert_pct, cooldown_sec
+     FROM watches
+     WHERE chat_id = ? AND active = 1
+     ORDER BY created_at DESC`,
+    [String(chatId)]
+  );
+
+  if (!rows.length) {
+    await sendTerminal(chatId, "📭 Watchlist empty.", mainMenu());
+    return;
+  }
+
+  const lines = rows.map((r, i) =>
+    `${i + 1}. ${r.base_symbol || r.query} | ${r.chain_id} | ${r.alert_pct}% | ${r.cooldown_sec}s`
+  );
+
+  await sendTerminal(
+    chatId,
+    `📋 Your Watchlist
+
+${lines.join("\n")}`,
+    watchlistMenu(rows)
+  );
 }
 
 async function removeWatch(chatId, id) {
@@ -415,7 +410,13 @@ async function showStatus(chatId) {
 
   await sendTerminal(
     chatId,
-    `📡 STATUS\n\nYour active watches: ${mine?.c || 0}\nTotal active watches: ${total?.c || 0}\nScan interval: ${SCAN_INTERVAL_MS / 1000}s\nGlobal alerts: ${settings.global_alerts ? "ON" : "OFF"}\nImage: ${fs.existsSync(INTRO_IMG) ? "OK" : "MISSING"}`,
+    `📡 STATUS
+
+Your active watches: ${mine?.c || 0}
+Total active watches: ${total?.c || 0}
+Scan interval: ${SCAN_INTERVAL_MS / 1000}s
+Global alerts: ${settings.global_alerts ? "ON" : "OFF"}
+Image: ${fs.existsSync(INTRO_IMG) ? "OK" : "MISSING"}`,
     mainMenu()
   );
 }
@@ -435,22 +436,19 @@ async function toggleGlobalAlerts(chatId) {
     const boosted = await fetchTopBoosted();
     if (boosted.length) {
       const lines = boosted.map((x, i) =>
-        `${i + 1}. ${x.chainId || "?"} | ${clip(x.tokenAddress || "", 12)} | boost ${num(x.totalAmount)}`
+        `${i + 1}. ${x.chainId || "?"} | ${clip(x.tokenAddress || "", 14)} | boost ${num(x.totalAmount)}`
       );
-      caption += `\n\nTop boosted snapshot:\n${lines.join("\n")}`;
+      caption += `
+
+Top boosted snapshot:
+${lines.join("\n")}`;
     }
   }
 
   await sendTerminal(chatId, caption, mainMenu());
 }
 
-async function forceScan(chatId) {
-  await bot.sendMessage(chatId, "⚡ Running scan now...");
-  await scanWatches(true, chatId);
-  await bot.sendMessage(chatId, "✅ Scan complete.");
-}
-
-async function maybeAlert(row, fresh, forceChatId = null) {
+async function maybeAlert(row, fresh, manualMode = false) {
   const pMove = pctChange(row.last_price, fresh.priceUsd);
   const lMove = pctChange(row.last_liquidity, fresh.liquidityUsd);
   const buyDelta = num(fresh.buysM5) - num(row.last_buys_m5);
@@ -478,15 +476,19 @@ async function maybeAlert(row, fresh, forceChatId = null) {
   const cooldownSec = num(row.cooldown_sec, DEFAULT_COOLDOWN_SEC);
   const cooldownOk = currentTs - num(row.last_alert_at, 0) >= cooldownSec;
 
-  if (reasons.length && (cooldownOk || forceChatId)) {
-    const targetChat = forceChatId || row.chat_id;
+  if (reasons.length && (cooldownOk || manualMode)) {
+    if (!manualMode) {
+      await bot.sendMessage(
+        row.chat_id,
+        `🚨 ${fresh.baseSymbol || row.base_symbol || row.query}
+${reasons.join("\n")}
 
-    await bot.sendMessage(
-      targetChat,
-      `🚨 ${fresh.baseSymbol || row.base_symbol || row.query}\n${reasons.join("\n")}\n\nPrice: ${shortUsd(fresh.priceUsd)}\nLiquidity: ${shortUsd(fresh.liquidityUsd)}\n24h Volume: ${shortUsd(fresh.volumeH24)}\nM5: B ${fresh.buysM5} | S ${fresh.sellsM5}`
-    );
+Price: ${shortUsd(fresh.priceUsd)}
+Liquidity: ${shortUsd(fresh.liquidityUsd)}
+24h Volume: ${shortUsd(fresh.volumeH24)}
+M5: B ${fresh.buysM5} | S ${fresh.sellsM5}`
+      );
 
-    if (!forceChatId) {
       await run(`UPDATE watches SET last_alert_at = ? WHERE id = ?`, [currentTs, row.id]);
     }
   }
@@ -504,35 +506,98 @@ async function maybeAlert(row, fresh, forceChatId = null) {
       row.id
     ]
   );
+
+  return {
+    symbol: fresh.baseSymbol || row.base_symbol || row.query,
+    price: fresh.priceUsd,
+    liquidity: fresh.liquidityUsd,
+    buysM5: fresh.buysM5,
+    sellsM5: fresh.sellsM5,
+    pMove,
+    lMove,
+    buyDelta,
+    sellDelta,
+    triggered: reasons
+  };
 }
 
-async function scanWatches(manual = false, manualChatId = null) {
-  if (scanRunning && !manual) return;
+async function scanWatches(manualMode = false, targetChatId = null) {
+  if (scanRunning && !manualMode) return { scanned: 0, results: [] };
+
   scanRunning = true;
 
   try {
     const rows = await all(
-      `SELECT * FROM watches WHERE active = 1 ORDER BY created_at ASC`
+      `SELECT * FROM watches WHERE active = 1 ${targetChatId ? "AND chat_id = ?" : ""} ORDER BY created_at ASC`,
+      targetChatId ? [String(targetChatId)] : []
     );
+
+    const results = [];
 
     for (const row of rows) {
       const fresh = await fetchPair(row.chain_id, row.pair_address);
       if (!fresh) continue;
       if (!fresh.priceUsd || fresh.priceUsd <= 0) continue;
 
-      await maybeAlert(row, fresh, manual ? manualChatId : null);
+      const result = await maybeAlert(row, fresh, manualMode);
+      results.push(result);
     }
+
+    return {
+      scanned: rows.length,
+      results
+    };
   } catch (err) {
     console.log("scanWatches error:", err.message);
+    return {
+      scanned: 0,
+      results: []
+    };
   } finally {
     scanRunning = false;
   }
 }
 
-// ================= START / COMMANDS =================
+async function forceScan(chatId) {
+  await bot.sendMessage(chatId, "⚡ Running scan now...");
+
+  const out = await scanWatches(true, chatId);
+
+  if (!out.results.length) {
+    await bot.sendMessage(chatId, "✅ Scan complete.\nNo active watch data found yet.");
+    return;
+  }
+
+  const lines = out.results.slice(0, 10).map((r) => {
+    const parts = [
+      `${r.symbol} | ${shortUsd(r.price)}`,
+      `liq ${shortUsd(r.liquidity)}`,
+      `m5 B ${r.buysM5} / S ${r.sellsM5}`
+    ];
+
+    if (r.triggered.length) {
+      parts.push(`alerts: ${r.triggered.join(" | ")}`);
+    } else {
+      parts.push("alerts: none");
+    }
+
+    return parts.join("\n");
+  });
+
+  await bot.sendMessage(
+    chatId,
+    `✅ Scan complete.
+
+Watches scanned: ${out.scanned}
+
+${lines.join("\n\n")}`
+  );
+}
+
 bot.onText(/\/start/, async (msg) => {
   const chatId = msg.chat.id;
   await ensureUserSettings(chatId);
+
   await sendTerminal(
     chatId,
     "🛡️ GORKTIMUS PRIME TERMINAL\nSelect an option below.",
@@ -544,7 +609,6 @@ bot.onText(/\/scan/, async (msg) => {
   await forceScan(msg.chat.id);
 });
 
-// ================= BUTTONS =================
 bot.on("callback_query", async (query) => {
   const chatId = query.message.chat.id;
   const data = query.data || "";
@@ -552,27 +616,19 @@ bot.on("callback_query", async (query) => {
   try {
     if (data === "add_watch") {
       pendingAction.set(chatId, { type: "ADD_WATCH" });
-      await bot.sendMessage(chatId, "Send ticker, token address, or pair search. Example: SOL or contract address");
+      await bot.sendMessage(chatId, "Send ticker, token address, or pair search. Example: SOL");
     } else if (data === "watchlist") {
       await showWatchlist(chatId);
     } else if (data === "global_alerts") {
       await toggleGlobalAlerts(chatId);
     } else if (data === "status") {
       await showStatus(chatId);
-    } else if (data === "refresh_menu") {
-      await sendTerminal(
-        chatId,
-        "🛡️ GORKTIMUS PRIME TERMINAL\nRefreshed.",
-        mainMenu()
-      );
     } else if (data === "scan_now") {
       await forceScan(chatId);
+    } else if (data === "refresh_menu") {
+      await sendTerminal(chatId, "🛡️ GORKTIMUS PRIME TERMINAL\nRefreshed.", mainMenu());
     } else if (data === "main_menu") {
-      await sendTerminal(
-        chatId,
-        "🛡️ GORKTIMUS PRIME TERMINAL\nSelect an option below.",
-        mainMenu()
-      );
+      await sendTerminal(chatId, "🛡️ GORKTIMUS PRIME TERMINAL\nSelect an option below.", mainMenu());
     } else if (data.startsWith("remove_watch:")) {
       const id = Number(data.split(":")[1]);
       if (Number.isFinite(id)) {
@@ -589,7 +645,6 @@ bot.on("callback_query", async (query) => {
   }
 });
 
-// ================= MESSAGE HANDLER =================
 bot.on("message", async (msg) => {
   const chatId = msg.chat.id;
   const text = msg.text;
@@ -612,7 +667,6 @@ bot.on("message", async (msg) => {
   }
 });
 
-// ================= POLLING / ERROR =================
 bot.on("polling_error", (err) => {
   console.log("Polling error:", err.code, err.message);
 });
@@ -621,11 +675,12 @@ bot.on("error", (err) => {
   console.log("Bot error:", err.message);
 });
 
-// ================= BOOT =================
 (async () => {
   await initDb();
+  await ensureUserSettings("system_bootstrap").catch(() => {});
   console.log("🧠 Gorktimus Prime Bot Running...");
   console.log("📁 Image exists on boot:", fs.existsSync(INTRO_IMG));
+
   setInterval(() => {
     scanWatches(false, null);
   }, SCAN_INTERVAL_MS);
