@@ -7,6 +7,7 @@ const fs = require("fs");
 // ================= ENV =================
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const HELIUS_API_KEY = process.env.HELIUS_API_KEY || "";
+const ETHERSCAN_API_KEY = process.env.ETHERSCAN_API_KEY || "";
 const COMMUNITY_X_URL = process.env.COMMUNITY_X_URL || "https://x.com/gorktimusprime";
 const COMMUNITY_TELEGRAM_URL =
   process.env.COMMUNITY_TELEGRAM_URL || "https://t.me/GorktimusPrime";
@@ -32,6 +33,14 @@ const WALLET_SCAN_INTERVAL_MS = 20000;
 const DEX_TIMEOUT_MS = 15000;
 const HELIUS_TIMEOUT_MS = 20000;
 const TELEGRAM_SEND_RETRY_MS = 900;
+
+const ETHERSCAN_V2_URL = "https://api.etherscan.io/v2/api";
+const HONEYPOT_API_BASE = "https://api.honeypot.is";
+
+const EVM_CHAIN_IDS = {
+  ethereum: 1,
+  base: 8453
+};
 
 // ================= GLOBALS =================
 const db = new sqlite3.Database(DB_PATH);
@@ -138,6 +147,14 @@ function clip(value, len = 28) {
   return `${s.slice(0, len - 1)}…`;
 }
 
+function toPct(value, digits = 2) {
+  return `${num(value).toFixed(digits)}%`;
+}
+
+function sum(arr = []) {
+  return arr.reduce((a, b) => a + num(b), 0);
+}
+
 function isAddressLike(text) {
   const t = String(text || "").trim();
   return /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(t) || /^0x[a-fA-F0-9]{40}$/.test(t);
@@ -152,8 +169,17 @@ function hasHelius() {
   return !!HELIUS_API_KEY;
 }
 
+function hasEtherscanKey() {
+  return !!ETHERSCAN_API_KEY;
+}
+
 function supportsChain(chainId) {
   return SUPPORTED_CHAINS.includes(String(chainId || "").toLowerCase());
+}
+
+function isEvmChain(chainId) {
+  const c = String(chainId || "").toLowerCase();
+  return c === "ethereum" || c === "base";
 }
 
 function humanChain(chainId) {
@@ -515,6 +541,14 @@ async function safeGet(url, timeout = DEX_TIMEOUT_MS) {
   return res.data;
 }
 
+async function rpcPost(url, body, timeout = HELIUS_TIMEOUT_MS) {
+  const res = await axios.post(url, body, {
+    timeout,
+    headers: { "Content-Type": "application/json" }
+  });
+  return res.data;
+}
+
 async function searchDexPairs(query) {
   const data = await safeGet(
     `https://api.dexscreener.com/latest/dex/search?q=${encodeURIComponent(query)}`
@@ -654,6 +688,212 @@ async function fetchTokenProfileImage(chainId, tokenAddress, fallbackPair = null
   }
 }
 
+// ================= CHAIN INTELLIGENCE =================
+async function fetchHeliusTokenLargestAccounts(mintAddress) {
+  if (!hasHelius() || !mintAddress) return [];
+
+  try {
+    const rpcUrl = `https://mainnet.helius-rpc.com/?api-key=${encodeURIComponent(HELIUS_API_KEY)}`;
+    const data = await rpcPost(rpcUrl, {
+      jsonrpc: "2.0",
+      id: "gork-largest-accounts",
+      method: "getTokenLargestAccounts",
+      params: [mintAddress]
+    });
+
+    const rows = Array.isArray(data?.result?.value) ? data.result.value : [];
+    return rows.map((x) => ({
+      address: String(x.address || ""),
+      amountRaw: String(x.amount || "0"),
+      uiAmount: num(x.uiAmountString ?? x.uiAmount ?? 0),
+      decimals: num(x.decimals, 0)
+    }));
+  } catch (err) {
+    console.log("fetchHeliusTokenLargestAccounts error:", err.message);
+    return [];
+  }
+}
+
+function analyzeSolanaHolderConcentration(largestAccounts = []) {
+  if (!largestAccounts.length) {
+    return {
+      label: "Unknown",
+      emoji: "⚠️",
+      score: 6,
+      top1Pct: 0,
+      top5Pct: 0,
+      top10Pct: 0,
+      holdersKnown: 0,
+      detail: "No holder concentration data returned"
+    };
+  }
+
+  const balances = largestAccounts.map((x) => num(x.uiAmount));
+  const totalTop20 = sum(balances);
+
+  if (totalTop20 <= 0) {
+    return {
+      label: "Unknown",
+      emoji: "⚠️",
+      score: 6,
+      top1Pct: 0,
+      top5Pct: 0,
+      top10Pct: 0,
+      holdersKnown: largestAccounts.length,
+      detail: "Largest accounts returned zeroed balances"
+    };
+  }
+
+  const top1Pct = (sum(balances.slice(0, 1)) / totalTop20) * 100;
+  const top5Pct = (sum(balances.slice(0, 5)) / totalTop20) * 100;
+  const top10Pct = (sum(balances.slice(0, 10)) / totalTop20) * 100;
+
+  let label = "Moderate";
+  let emoji = "⚠️";
+  let score = 8;
+
+  if (top1Pct >= 60 || top5Pct >= 90) {
+    label = "Very High";
+    emoji = "🚨";
+    score = 1;
+  } else if (top1Pct >= 35 || top5Pct >= 75) {
+    label = "High";
+    emoji = "⚠️";
+    score = 4;
+  } else if (top1Pct <= 15 && top5Pct <= 45) {
+    label = "Lower";
+    emoji = "✅";
+    score = 14;
+  }
+
+  return {
+    label,
+    emoji,
+    score,
+    top1Pct,
+    top5Pct,
+    top10Pct,
+    holdersKnown: largestAccounts.length,
+    detail: `Top 1: ${toPct(top1Pct)} | Top 5: ${toPct(top5Pct)} | Top 10: ${toPct(top10Pct)}`
+  };
+}
+
+async function fetchEvmHoneypot(address, chainId) {
+  if (!address || !isEvmChain(chainId)) return null;
+
+  try {
+    const chain = String(chainId).toLowerCase();
+    const url = `${HONEYPOT_API_BASE}/v2/IsHoneypot`;
+
+    const res = await axios.get(url, {
+      timeout: DEX_TIMEOUT_MS,
+      params: {
+        address,
+        chainID: EVM_CHAIN_IDS[chain]
+      }
+    });
+
+    return res.data || null;
+  } catch (err) {
+    console.log("fetchEvmHoneypot error:", err.message);
+    return null;
+  }
+}
+
+async function fetchEvmTopHolders(address, chainId) {
+  if (!address || !isEvmChain(chainId)) return null;
+
+  try {
+    const chain = String(chainId).toLowerCase();
+    const url = `${HONEYPOT_API_BASE}/v1/TopHolders`;
+
+    const res = await axios.get(url, {
+      timeout: DEX_TIMEOUT_MS,
+      params: {
+        address,
+        chainID: EVM_CHAIN_IDS[chain]
+      }
+    });
+
+    return res.data || null;
+  } catch (err) {
+    console.log("fetchEvmTopHolders error:", err.message);
+    return null;
+  }
+}
+
+function analyzeEvmTopHolders(data) {
+  const totalSupply = num(data?.totalSupply);
+  const holders = Array.isArray(data?.holders) ? data.holders : [];
+
+  if (!holders.length || totalSupply <= 0) {
+    return {
+      label: "Unknown",
+      emoji: "⚠️",
+      score: 6,
+      top1Pct: 0,
+      top5Pct: 0,
+      top10Pct: 0,
+      holdersKnown: 0,
+      detail: "No top holder data returned"
+    };
+  }
+
+  const balances = holders.map((h) => num(h.balance));
+  const top1Pct = (sum(balances.slice(0, 1)) / totalSupply) * 100;
+  const top5Pct = (sum(balances.slice(0, 5)) / totalSupply) * 100;
+  const top10Pct = (sum(balances.slice(0, 10)) / totalSupply) * 100;
+
+  let label = "Moderate";
+  let emoji = "⚠️";
+  let score = 8;
+
+  if (top1Pct >= 30 || top5Pct >= 70) {
+    label = "High";
+    emoji = "⚠️";
+    score = 4;
+  } else if (top1Pct <= 10 && top5Pct <= 30) {
+    label = "Lower";
+    emoji = "✅";
+    score = 14;
+  }
+
+  return {
+    label,
+    emoji,
+    score,
+    top1Pct,
+    top5Pct,
+    top10Pct,
+    holdersKnown: holders.length,
+    detail: `Top 1: ${toPct(top1Pct)} | Top 5: ${toPct(top5Pct)} | Top 10: ${toPct(top10Pct)}`
+  };
+}
+
+async function fetchEtherscanSourceCode(address, chainId) {
+  if (!hasEtherscanKey() || !address || !isEvmChain(chainId)) return null;
+
+  try {
+    const chain = String(chainId).toLowerCase();
+    const res = await axios.get(ETHERSCAN_V2_URL, {
+      timeout: DEX_TIMEOUT_MS,
+      params: {
+        apikey: ETHERSCAN_API_KEY,
+        chainid: String(EVM_CHAIN_IDS[chain]),
+        module: "contract",
+        action: "getsourcecode",
+        address
+      }
+    });
+
+    const result = Array.isArray(res.data?.result) ? res.data.result[0] : null;
+    return result || null;
+  } catch (err) {
+    console.log("fetchEtherscanSourceCode error:", err.message);
+    return null;
+  }
+}
+
 // ================= GORKTIMUS RISK VERDICT =================
 function getLiquidityHealth(liquidityUsd) {
   const liq = num(liquidityUsd);
@@ -723,13 +963,22 @@ function getVolumeHealth(volumeH24) {
   return { label: "Unknown", score: 0 };
 }
 
-function buildRecommendation(score, ageMin, pair) {
+function buildRecommendation(score, ageMin, pair, verdictMeta = {}) {
   const liq = num(pair.liquidityUsd);
   const buys = num(pair.buysM5);
   const sells = num(pair.sellsM5);
 
+  if (verdictMeta.isHoneypot === true) {
+    return "Avoid. Simulation and risk signals point to honeypot behavior.";
+  }
+  if (num(verdictMeta.sellTax) >= 25 || num(verdictMeta.buyTax) >= 25) {
+    return "High caution. Token taxes are elevated and can crush exits.";
+  }
   if (liq < 10000) {
     return "High risk. Liquidity is thin, so even small exits can hit price hard.";
+  }
+  if (verdictMeta.holderTop5Pct >= 75) {
+    return "Caution. Supply looks concentrated, which increases dump and control risk.";
   }
   if (ageMin > 0 && ageMin < 10) {
     return "Ultra-early token. Watch closely before sizing in because conditions can change fast.";
@@ -753,50 +1002,178 @@ async function buildRiskVerdict(pair) {
   const flow = getFlowHealth(pair);
   const volume = getVolumeHealth(pair.volumeH24);
 
-  const orders = await fetchTokenOrders(pair.chainId, pair.baseAddress);
-  const approvedCount = orders.filter((x) => x?.status === "approved").length;
-
   let transparencyLabel = "Unknown";
   let transparencyEmoji = "⚠️";
   let transparencyScore = 4;
-
-  if (approvedCount >= 2) {
-    transparencyLabel = "Better Signal";
-    transparencyEmoji = "✅";
-    transparencyScore = 14;
-  } else if (approvedCount >= 1) {
-    transparencyLabel = "Some Signal";
-    transparencyEmoji = "⚠️";
-    transparencyScore = 10;
-  }
+  let transparencyDetail = "";
 
   let honeypotLabel = "Unknown";
   let honeypotEmoji = "⚠️";
   let honeypotScore = 6;
-
-  const chain = String(pair.chainId || "").toLowerCase();
-  if (chain === "solana") {
-    honeypotLabel = "Not Fully Testable";
-    honeypotEmoji = "⚠️";
-    honeypotScore = 8;
-  } else if (chain === "base" || chain === "ethereum") {
-    honeypotLabel = "Unverified";
-    honeypotEmoji = "⚠️";
-    honeypotScore = 6;
-  }
+  let honeypotDetail = "";
 
   let holderLabel = "Unknown";
   let holderEmoji = "⚠️";
   let holderScore = 6;
+  let holderDetail = "";
 
-  if (num(pair.liquidityUsd) >= 100000 && num(pair.volumeH24) >= 250000 && ageMin >= 180) {
-    holderLabel = "Likely More Distributed";
-    holderEmoji = "✅";
-    holderScore = 12;
-  } else if (num(pair.liquidityUsd) >= 25000 && ageMin >= 30) {
-    holderLabel = "Moderate Visibility";
-    holderEmoji = "⚠️";
-    holderScore = 8;
+  let buyTax = null;
+  let sellTax = null;
+  let transferTax = null;
+  let holderTop5Pct = 0;
+  let isHoneypot = null;
+
+  const chain = String(pair.chainId || "").toLowerCase();
+
+  if (chain === "solana") {
+    const largestAccounts = await fetchHeliusTokenLargestAccounts(pair.baseAddress);
+    const holderInfo = analyzeSolanaHolderConcentration(largestAccounts);
+
+    holderLabel = holderInfo.label;
+    holderEmoji = holderInfo.emoji;
+    holderScore = holderInfo.score;
+    holderDetail = holderInfo.detail;
+    holderTop5Pct = holderInfo.top5Pct;
+
+    const orders = await fetchTokenOrders(pair.chainId, pair.baseAddress);
+    const approvedCount = orders.filter((x) => x?.status === "approved").length;
+
+    if (approvedCount >= 2) {
+      transparencyLabel = "Better Signal";
+      transparencyEmoji = "✅";
+      transparencyScore = 14;
+    } else if (approvedCount >= 1) {
+      transparencyLabel = "Some Signal";
+      transparencyEmoji = "⚠️";
+      transparencyScore = 10;
+    } else {
+      transparencyLabel = "Limited";
+      transparencyEmoji = "⚠️";
+      transparencyScore = 5;
+    }
+
+    transparencyDetail = approvedCount
+      ? `Dex order approvals detected: ${approvedCount}`
+      : "No extra order approval signal detected";
+
+    honeypotLabel = "Not Fully Testable";
+    honeypotEmoji = "⚠️";
+    honeypotScore = 8;
+    honeypotDetail = "Solana honeypot simulation not fully supported in this stack yet";
+  } else if (isEvmChain(chain)) {
+    const [honeypotData, topHoldersData, etherscanData] = await Promise.all([
+      fetchEvmHoneypot(pair.baseAddress, chain),
+      fetchEvmTopHolders(pair.baseAddress, chain),
+      fetchEtherscanSourceCode(pair.baseAddress, chain)
+    ]);
+
+    if (honeypotData?.summary) {
+      const risk = String(honeypotData.summary.risk || "").toLowerCase();
+      const riskLevel = num(honeypotData.summary.riskLevel, 0);
+      isHoneypot = honeypotData?.honeypotResult?.isHoneypot === true;
+
+      buyTax = honeypotData?.simulationResult?.buyTax ?? null;
+      sellTax = honeypotData?.simulationResult?.sellTax ?? null;
+      transferTax = honeypotData?.simulationResult?.transferTax ?? null;
+
+      if (isHoneypot || risk === "honeypot" || riskLevel >= 90) {
+        honeypotLabel = "Detected";
+        honeypotEmoji = "🚨";
+        honeypotScore = 0;
+      } else if (riskLevel >= 60) {
+        honeypotLabel = `High Risk (${risk || "high"})`;
+        honeypotEmoji = "⚠️";
+        honeypotScore = 2;
+      } else if (riskLevel >= 20) {
+        honeypotLabel = `Medium Risk (${risk || "medium"})`;
+        honeypotEmoji = "⚠️";
+        honeypotScore = 6;
+      } else {
+        honeypotLabel = `Clearer (${risk || "low"})`;
+        honeypotEmoji = "✅";
+        honeypotScore = 14;
+      }
+
+      const taxBits = [];
+      if (buyTax !== null) taxBits.push(`Buy tax: ${buyTax}%`);
+      if (sellTax !== null) taxBits.push(`Sell tax: ${sellTax}%`);
+      if (transferTax !== null) taxBits.push(`Transfer tax: ${transferTax}%`);
+      honeypotDetail = taxBits.join(" | ");
+
+      if (num(sellTax) >= 30 || num(buyTax) >= 30) {
+        honeypotScore = Math.min(honeypotScore, 2);
+      } else if (num(sellTax) >= 15 || num(buyTax) >= 15) {
+        honeypotScore = Math.min(honeypotScore, 6);
+      }
+    } else {
+      honeypotLabel = "Unavailable";
+      honeypotEmoji = "⚠️";
+      honeypotScore = 5;
+      honeypotDetail = "No honeypot simulation response returned";
+    }
+
+    const holderInfo = analyzeEvmTopHolders(topHoldersData);
+    holderLabel = holderInfo.label;
+    holderEmoji = holderInfo.emoji;
+    holderScore = holderInfo.score;
+    holderDetail = holderInfo.detail;
+    holderTop5Pct = holderInfo.top5Pct;
+
+    if (honeypotData?.contractCode) {
+      const code = honeypotData.contractCode;
+      const openSource = code.openSource === true || code.rootOpenSource === true;
+      const proxyRisk = code.hasProxyCalls === true || code.isProxy === true;
+
+      if (openSource && !proxyRisk) {
+        transparencyLabel = "Verified Open Source";
+        transparencyEmoji = "✅";
+        transparencyScore = 16;
+      } else if (openSource && proxyRisk) {
+        transparencyLabel = "Open Source + Proxy";
+        transparencyEmoji = "⚠️";
+        transparencyScore = 10;
+      } else {
+        transparencyLabel = "Closed / Limited";
+        transparencyEmoji = "⚠️";
+        transparencyScore = 3;
+      }
+
+      transparencyDetail = [
+        `Open source: ${openSource ? "yes" : "no"}`,
+        `Proxy path: ${proxyRisk ? "yes" : "no"}`
+      ].join(" | ");
+    } else if (etherscanData) {
+      const sourceCode = String(etherscanData.SourceCode || "").trim();
+      const abi = String(etherscanData.ABI || "").trim();
+      const implementation = String(etherscanData.Implementation || "").trim();
+      const proxy = String(etherscanData.Proxy || "0").trim() === "1";
+
+      const hasSource = !!sourceCode && sourceCode !== "0";
+      const hasAbi = !!abi && abi !== "Contract source code not verified";
+
+      if (hasSource || hasAbi) {
+        transparencyLabel = proxy ? "Verified + Proxy" : "Verified";
+        transparencyEmoji = proxy ? "⚠️" : "✅";
+        transparencyScore = proxy ? 11 : 15;
+      } else {
+        transparencyLabel = "Unverified";
+        transparencyEmoji = "⚠️";
+        transparencyScore = 3;
+      }
+
+      transparencyDetail = [
+        `Source: ${hasSource ? "yes" : "no"}`,
+        `ABI: ${hasAbi ? "yes" : "no"}`,
+        `Proxy: ${proxy || implementation ? "yes" : "no"}`
+      ].join(" | ");
+    } else {
+      transparencyLabel = hasEtherscanKey() ? "Unavailable" : "No Etherscan Key";
+      transparencyEmoji = "⚠️";
+      transparencyScore = hasEtherscanKey() ? 4 : 2;
+      transparencyDetail = hasEtherscanKey()
+        ? "Explorer verification response unavailable"
+        : "Set ETHERSCAN_API_KEY for contract verification fallback";
+    }
   }
 
   let rawScore =
@@ -810,7 +1187,13 @@ async function buildRiskVerdict(pair) {
 
   rawScore = Math.max(0, Math.min(100, Math.round(rawScore)));
 
-  const recommendation = buildRecommendation(rawScore, ageMin, pair);
+  const recommendation = buildRecommendation(rawScore, ageMin, pair, {
+    isHoneypot,
+    buyTax,
+    sellTax,
+    transferTax,
+    holderTop5Pct
+  });
 
   return {
     honeypot: `${honeypotEmoji} ${honeypotLabel}`,
@@ -818,7 +1201,13 @@ async function buildRiskVerdict(pair) {
     holders: `${holderEmoji} ${holderLabel}`,
     liquidity: `${liquidity.emoji} ${liquidity.label}`,
     score: rawScore,
-    recommendation
+    recommendation,
+    buyTax,
+    sellTax,
+    transferTax,
+    holderDetail,
+    transparencyDetail,
+    honeypotDetail
   };
 }
 
@@ -863,6 +1252,21 @@ async function buildScanCard(pair, title = "🔎 Token Scan") {
     `👥 <b>Holder Concentration:</b> ${escapeHtml(verdict.holders)}`,
     `💧 <b>Liquidity Health:</b> ${escapeHtml(verdict.liquidity)}`,
     ``,
+    verdict.buyTax !== null || verdict.sellTax !== null || verdict.transferTax !== null
+      ? `🧾 <b>Taxes:</b> Buy ${escapeHtml(
+          verdict.buyTax !== null ? `${verdict.buyTax}%` : "N/A"
+        )} | Sell ${escapeHtml(
+          verdict.sellTax !== null ? `${verdict.sellTax}%` : "N/A"
+        )} | Transfer ${escapeHtml(
+          verdict.transferTax !== null ? `${verdict.transferTax}%` : "N/A"
+        )}`
+      : "",
+    verdict.honeypotDetail ? `🧪 <b>Simulation:</b> ${escapeHtml(verdict.honeypotDetail)}` : "",
+    verdict.holderDetail ? `📦 <b>Holder Detail:</b> ${escapeHtml(verdict.holderDetail)}` : "",
+    verdict.transparencyDetail
+      ? `📜 <b>Code Detail:</b> ${escapeHtml(verdict.transparencyDetail)}`
+      : "",
+    ``,
     `📊 <b>Safety Score:</b> ${escapeHtml(String(verdict.score))} / 100`,
     ``,
     `📢 <b>Recommendation:</b> ${escapeHtml(verdict.recommendation)}`,
@@ -881,7 +1285,7 @@ async function buildScanCard(pair, title = "🔎 Token Scan") {
     ``,
     `🔗 <b>Data Sources</b>`,
     ...buildSourceLines(pair)
-  ];
+  ].filter(Boolean);
 
   return lines.join("\n");
 }
@@ -924,6 +1328,21 @@ async function buildLaunchCard(pair, rank = 0) {
     `👥 <b>Holder Concentration:</b> ${escapeHtml(verdict.holders)}`,
     `💧 <b>Liquidity Health:</b> ${escapeHtml(verdict.liquidity)}`,
     ``,
+    verdict.buyTax !== null || verdict.sellTax !== null || verdict.transferTax !== null
+      ? `🧾 <b>Taxes:</b> Buy ${escapeHtml(
+          verdict.buyTax !== null ? `${verdict.buyTax}%` : "N/A"
+        )} | Sell ${escapeHtml(
+          verdict.sellTax !== null ? `${verdict.sellTax}%` : "N/A"
+        )} | Transfer ${escapeHtml(
+          verdict.transferTax !== null ? `${verdict.transferTax}%` : "N/A"
+        )}`
+      : "",
+    verdict.honeypotDetail ? `🧪 <b>Simulation:</b> ${escapeHtml(verdict.honeypotDetail)}` : "",
+    verdict.holderDetail ? `📦 <b>Holder Detail:</b> ${escapeHtml(verdict.holderDetail)}` : "",
+    verdict.transparencyDetail
+      ? `📜 <b>Code Detail:</b> ${escapeHtml(verdict.transparencyDetail)}`
+      : "",
+    ``,
     `📊 <b>Safety Score:</b> ${escapeHtml(String(verdict.score))} / 100`,
     ``,
     `📢 <b>Recommendation:</b> ${escapeHtml(verdict.recommendation)}`,
@@ -944,7 +1363,7 @@ async function buildLaunchCard(pair, rank = 0) {
     ``,
     `🔗 <b>Data Sources</b>`,
     ...buildSourceLines(pair)
-  ];
+  ].filter(Boolean);
 
   return lines.join("\n");
 }
@@ -1180,10 +1599,10 @@ async function buildPrimePickCandidates(limit = 5) {
     if (pair.buysM5 < pair.sellsM5) continue;
     if (!pair.priceUsd || !pair.marketCap) continue;
 
-    const orders = await fetchTokenOrders(pair.chainId, pair.baseAddress);
-    const approvedCount = orders.filter((x) => x?.status === "approved").length;
-    pair._primeScore = primePickScore(pair) + approvedCount * 10000;
+    const verdict = await buildRiskVerdict(pair);
+    if (verdict.score < 52) continue;
 
+    pair._primeScore = primePickScore(pair) + verdict.score * 500;
     out.push(pair);
   }
 
@@ -1245,6 +1664,9 @@ async function showSystemStatus(chatId) {
     `✅ Database: Connected`,
     `✅ Market Data: Active`,
     `${hasHelius() ? "✅" : "⚠️"} Helius: ${hasHelius() ? "Connected" : "Missing"}`,
+    `${hasEtherscanKey() ? "✅" : "⚠️"} Etherscan: ${
+      hasEtherscanKey() ? "Connected" : "Missing"
+    }`,
     `${fs.existsSync(TERMINAL_IMG) ? "✅" : "⚠️"} Terminal Image: ${
       fs.existsSync(TERMINAL_IMG) ? "Loaded" : "Missing"
     }`,
@@ -1274,7 +1696,7 @@ async function showHowToUse(chatId) {
     `Review newer launches with a short market verdict.`,
     ``,
     `⭐ <b>Prime Picks</b>`,
-    `View cleaner candidates that pass liquidity, volume, and age filters.`,
+    `View cleaner candidates that pass liquidity, volume, age, and risk filters.`,
     ``,
     `🐋 <b>Whale Tracker</b>`,
     `Track named whale and dev wallets with optional alerts.`
@@ -1293,6 +1715,8 @@ async function showDataSources(chatId) {
     `• DexScreener`,
     `• Birdeye`,
     `• GeckoTerminal`,
+    `• Honeypot.is`,
+    `• Etherscan V2`,
     ``,
     `Wallet monitoring uses:`,
     `• Helius RPC`,
@@ -2017,6 +2441,7 @@ process.once("SIGINT", () => shutdown("SIGINT"));
   console.log("🧠 Gorktimus Intelligence Terminal Running...");
   console.log("🖼️ Menu image exists:", fs.existsSync(TERMINAL_IMG));
   console.log("🔑 Helius enabled:", hasHelius());
+  console.log("🔑 Etherscan enabled:", hasEtherscanKey());
 
   if (hasHelius()) {
     walletScanInterval = setInterval(() => {
