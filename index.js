@@ -8,13 +8,17 @@ const fs = require("fs");
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const HELIUS_API_KEY = process.env.HELIUS_API_KEY || "";
 const ETHERSCAN_API_KEY = process.env.ETHERSCAN_API_KEY || "";
-const COMMUNITY_X_URL = process.env.COMMUNITY_X_URL || "https://x.com/gorktimusprime";
+const COMMUNITY_X_URL =
+  process.env.COMMUNITY_X_URL || "https://x.com/gorktimusprime";
 const COMMUNITY_TELEGRAM_URL =
-  process.env.COMMUNITY_TELEGRAM_URL || "https://t.me/https://t.me/+A4h3DK3p2tNhNjlh
-";
-const REQUIRED_CHANNEL_USERNAME =
-  process.env.REQUIRED_CHANNEL_USERNAME || "@https://t.me/+A4h3DK3p2tNhNjlh
-";
+  process.env.COMMUNITY_TELEGRAM_URL || "https://t.me/+A4h3DK3p2tNhNjlh";
+
+// IMPORTANT:
+// This must be the Telegram channel/group username like @gorktimusprimezone
+// OR a numeric chat id like -1001234567890
+// DO NOT put the invite link here.
+const REQUIRED_CHANNEL =
+  process.env.REQUIRED_CHANNEL || "@gorktimusprimezone";
 
 if (!BOT_TOKEN) {
   console.error("❌ TELEGRAM_BOT_TOKEN not set");
@@ -327,7 +331,7 @@ async function getVerifiedSubscriberBotUsersCount() {
 
 async function getChannelSubscriberCount() {
   try {
-    const count = await bot.getChatMemberCount(REQUIRED_CHANNEL_USERNAME);
+    const count = await bot.getChatMemberCount(REQUIRED_CHANNEL);
     return count;
   } catch (err) {
     console.log("getChannelSubscriberCount error:", err.message);
@@ -337,7 +341,7 @@ async function getChannelSubscriberCount() {
 
 async function isUserSubscribed(userId) {
   try {
-    const member = await bot.getChatMember(REQUIRED_CHANNEL_USERNAME, userId);
+    const member = await bot.getChatMember(REQUIRED_CHANNEL, userId);
     const ok = ["member", "administrator", "creator"].includes(member.status);
     await setUserSubscription(userId, ok);
     return ok;
@@ -363,7 +367,7 @@ async function showSubscriptionRequired(chatId) {
   await sendMenu(
     chatId,
     `🧠 <b>Gorktimus Intelligence Terminal</b>\n\n🚫 <b>Access Locked</b>\n\nYou must join the official channel before using the bot.\n\nRequired channel: <b>${escapeHtml(
-      REQUIRED_CHANNEL_USERNAME
+      REQUIRED_CHANNEL
     )}</b>`,
     buildSubscriptionGate()
   );
@@ -1745,7 +1749,7 @@ async function showSystemStatus(chatId) {
     `${fs.existsSync(TERMINAL_IMG) ? "✅" : "⚠️"} Terminal Image: ${
       fs.existsSync(TERMINAL_IMG) ? "Loaded" : "Missing"
     }`,
-    `📢 Required Channel: ${escapeHtml(REQUIRED_CHANNEL_USERNAME)}`,
+    `📢 Required Channel: ${escapeHtml(REQUIRED_CHANNEL)}`,
     `👥 Channel Subscribers: ${channelSubscribers === null ? "Unavailable" : channelSubscribers}`,
     `🤖 Bot Users Saved: ${botUserCount}`,
     `✅ Verified Subscriber Bot Users: ${verifiedBotUsers}`,
@@ -2573,7 +2577,7 @@ process.once("SIGINT", () => shutdown("SIGINT"));
   console.log("🖼️ Menu image exists:", fs.existsSync(TERMINAL_IMG));
   console.log("🔑 Helius enabled:", hasHelius());
   console.log("🔑 Etherscan enabled:", hasEtherscanKey());
-  console.log("📢 Required channel:", REQUIRED_CHANNEL_USERNAME);
+  console.log("📢 Required channel:", REQUIRED_CHANNEL);
 
   if (hasHelius()) {
     walletScanInterval = setInterval(() => {
