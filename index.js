@@ -2495,7 +2495,7 @@ async function buildTrendingCandidates(limit = 10) {
   }
 
   const candidates = [];
-  for (const item of [...merged.values()].slice(0, 40)) {
+ for (const item of [...merged.values()].slice(0, 40)) {
     const pair = await resolveTokenToBestPair(item.chainId, item.tokenAddress);
     if (!pair) continue;
     if (pair.liquidityUsd < 10000) continue;
