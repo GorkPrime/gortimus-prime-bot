@@ -1046,7 +1046,7 @@ process.once("SIGINT", () => shutdown("SIGINT"));
 
 {;
         
-        transparencyScore = proxy ? 11 : 15;
+ { transparencyScore = proxy ? 11 : 15;
         transparencyLabel = "Unverified";
         transparencyEmoji = "⚠️";
         transparencyScore = 3;
