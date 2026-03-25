@@ -1057,7 +1057,8 @@ process.once("SIGINT", () => shutdown("SIGINT"));
         `ABI: ${hasAbi ? "yes" : "no"}`,
         `Proxy: ${proxy || implementation ? "yes" : "no"}`
       ].join(" | ");
-    } else {
+    } 
+   {
       transparencyLabel = hasEtherscanKey() ? "Unavailable" : "No Etherscan Key";
       transparencyEmoji = "⚠️";
       transparencyScore = hasEtherscanKey() ? 4 : 2;
