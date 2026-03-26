@@ -1361,43 +1361,42 @@ async function fetchHeliusTokenLargestAccounts(mintAddress) {
 
   try {
     const rpcUrl = `https://mainnet.helius-rpc.com/?api-key=${encodeURIComponent(HELIUS_API_KEY)}`;
-    const data = await retryOperation(
-      "fetchHeliusTokenLargestAccounts",
-      async () => {
-        const out = await rpcPost(rpcUrl, {
-          jsonrpc: "2.0",
-          id: "gork-largest-accounts",
-          method: "getTokenLargestAccounts",
-          params: [mintAddress]
-        });
+   const data = await retryOperation(
+  "fetchHeliusTokenLargestAccounts",
+  async () => {
+    const out = await rpcPost(rpcUrl, {
+      jsonrpc: "2.0",
+      id: "gork-largest-accounts",
+      method: "getTokenLargestAccounts",
+      params: [mintAddress]
+    });
 
-        if (!Array.isArray(out?.result?.value)) {
-          throw new Error("Largest accounts payload missing");
-        }
+    if (!Array.isArray(out?.result?.value)) {
+      throw new Error("Largest accounts payload missing");
+    }
 
-        return out;
-      },
-      {
-       {
-  attempts: 2,
-  baseDelay: 5000,
-  maxDelay: 15000,
-  backoff: 2,
-        shouldRetry: (err) => {
-          const status = err?.response?.status;
-          return [408, 425, 429, 500, 502, 503, 504].includes(status) ||
-            err?.code === "ECONNABORTED" ||
-            err?.code === "ETIMEDOUT" ||
-            err?.code === "ECONNRESET";
-        },
-        onRetry: (err, attempt, delay) => {
-          console.log(
-            `fetchHeliusTokenLargestAccounts retry ${attempt} in ${delay}ms:`,
-            err?.response?.status || err.message
-          );
-        }
-      }
-    );
+    return out;
+  },
+  {
+    attempts: 2,
+    baseDelay: 5000,
+    maxDelay: 15000,
+    backoff: 2,
+    shouldRetry: (err) => {
+      const status = err?.response?.status;
+      return [408, 425, 500, 502, 503, 504].includes(status) ||
+        err?.code === "ECONNABORTED" ||
+        err?.code === "ETIMEDOUT" ||
+        err?.code === "ECONNRESET";
+    },
+    onRetry: (err, attempt, delay) => {
+      console.log(
+        `fetchHeliusTokenLargestAccounts retry ${attempt} in ${delay}ms:`,
+        err?.response?.status || err.message
+      );
+    }
+  }
+);
 
     const rows = Array.isArray(data?.result?.value) ? data.result.value : [];
     return rows.map((x) => ({
