@@ -414,7 +414,35 @@ function makeGeckoUrl(chainId, pairAddress) {
 function getMsgChat(msgOrQuery) {
   return msgOrQuery?.message?.chat || msgOrQuery?.chat || null;
 }
-
+async function showMainMenu(chatId) {
+  await sendText(
+    chatId,
+    "<b>GorKtimus Main Menu</b>\n\nChoose your command center below.",
+    buildMainMenu()
+  );
+}async function promptScanToken(chatId) {
+  await setExpecting(chatId, "scan_query");
+  await sendText(
+    chatId,
+    "Send a token ticker, token name, or contract address to scan.",
+    {
+      reply_markup: {
+        inline_keyboard: [buildBackMenuRow()]
+      },
+      parse_mode: "HTML"
+    }
+  );
+}
+async function trackUserActivity(chatId) {
+  try {
+    await run(
+      `UPDATE users SET updated_at = ? WHERE chat_id = ?`,
+      [Date.now(), String(chatId)]
+    );
+  } catch (err) {
+    console.error("trackUserActivity error:", err.message);
+  }
+}
 function isPrivateChat(msgOrQuery) {
   const chat = getMsgChat(msgOrQuery);
   return chat?.type === "private";
