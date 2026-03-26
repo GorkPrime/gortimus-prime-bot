@@ -1,12 +1,28 @@
 
+/**
+ * GorKtimus New Update
+ * Fresh rebuild from scratch
+ * Core stack: Telegram + DexScreener + SQLite + optional Helius
+ *
+ * Required env:
+ * TELEGRAM_BOT_TOKEN=...
+ * CHANNEL_USERNAME=@yourchannel            // optional membership gate
+ * HELIUS_API_KEY=...                       // optional wallet tracking
+ * OPENAI_API_KEY=...                       // optional future AI mode
+ * DEFAULT_ALERT_PCT=5
+ * DEFAULT_LIQ_ALERT_PCT=10
+ * ALERT_COOLDOWN_SECONDS=900
+ */
 
 "use strict";
+
 const path = require("path");
 const crypto = require("crypto");
 const axios = require("axios");
 const TelegramBot = require("node-telegram-bot-api");
 const sqlite3 = require("sqlite3").verbose();
 const { promisify } = require("util");
+
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || "";
 const CHANNEL_USERNAME = process.env.CHANNEL_USERNAME || "";
 const HELIUS_API_KEY = process.env.HELIUS_API_KEY || "";
@@ -15,12 +31,15 @@ const DEFAULT_ALERT_PCT = Number(process.env.DEFAULT_ALERT_PCT || 5);
 const DEFAULT_LIQ_ALERT_PCT = Number(process.env.DEFAULT_LIQ_ALERT_PCT || 10);
 const ALERT_COOLDOWN_SECONDS = Number(process.env.ALERT_COOLDOWN_SECONDS || 900);
 const DB_PATH = process.env.DB_PATH || path.join(__dirname, "gorktimus.db");
+
 if (!BOT_TOKEN) {
   console.error("TELEGRAM_BOT_TOKEN not provided");
   process.exit(1);
 }
+
 const bot = new TelegramBot(BOT_TOKEN, { polling: true });
 const db = new sqlite3.Database(DB_PATH);
+
 const run = (sql, params = []) =>
   new Promise((resolve, reject) => {
     db.run(sql, params, function onRun(err) {
@@ -28,25 +47,32 @@ const run = (sql, params = []) =>
       resolve(this);
     });
   });
+
 const get = promisify(db.get.bind(db));
 const all = promisify(db.all.bind(db));
+
 function nowTs() {
   return Date.now();
 }
+
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
+
 function safeNum(value, fallback = 0) {
   const n = Number(value);
   return Number.isFinite(n) ? n : fallback;
 }
+
 function pctChange(oldValue, newValue) {
   if (!Number.isFinite(oldValue) || oldValue === 0) return 0;
   return ((newValue - oldValue) / oldValue) * 100;
 }
+
 function fmtInt(n) {
   return Number.isFinite(n) ? Math.round(n).toLocaleString("en-US") : "0";
 }
+
 function fmtUsd(n) {
   const value = safeNum(n, NaN);
   if (!Number.isFinite(value)) return "N/A";
@@ -57,32 +83,40 @@ function fmtUsd(n) {
   if (value > 0) return `$${value.toFixed(6)}`;
   return "$0.00";
 }
+
 function fmtPct(n) {
   const value = safeNum(n, NaN);
-}
   return Number.isFinite(value) ? `${value.toFixed(2)}%` : "N/A";
+}
+
 function escapeHtml(input = "") {
   return String(input)
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;");
 }
+
 function shortAddr(addr = "", head = 6, tail = 4) {
   if (!addr || addr.length <= head + tail + 3) return addr || "N/A";
   return `${addr.slice(0, head)}...${addr.slice(-tail)}`;
 }
+
 function normalizeText(v = "") {
   return String(v).trim();
 }
+
 function hasHelius() {
   return Boolean(HELIUS_API_KEY);
 }
+
 function isLikelySolanaWallet(input = "") {
   return /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(String(input).trim());
 }
+
 function makeHash(input = "") {
   return crypto.createHash("sha256").update(String(input)).digest("hex");
 }
+
 function buildMainMenu() {
   return {
     reply_markup: {
@@ -110,10 +144,11 @@ function buildMainMenu() {
     disable_web_page_preview: true
   };
 }
-}
+
 function buildBackMenuRow() {
   return [{ text: "Main Menu", callback_data: "main_menu" }];
 }
+
 function buildModeButtons(activeMode = "balanced") {
   const decorate = (mode, label) => (mode === activeMode ? `* ${label}` : label);
   return {
@@ -128,6 +163,7 @@ function buildModeButtons(activeMode = "balanced") {
     parse_mode: "HTML"
   };
 }
+
 function buildAlertsMenu(settings) {
   const onOff = (v) => (v ? "ON" : "OFF");
   return {
@@ -138,11 +174,12 @@ function buildAlertsMenu(settings) {
         [{ text: `Watchlist Risk ${onOff(settings.risk_alerts)}`, callback_data: "toggle_alert_risk" }],
         [{ text: `Wallet Alerts ${onOff(settings.wallet_alerts)}`, callback_data: "toggle_alert_wallet" }],
         buildBackMenuRow()
-}
       ]
     },
     parse_mode: "HTML"
   };
+}
+
 function buildWatchlistMenu(tokens) {
   const keyboard = tokens.slice(0, 10).map((t) => [
     { text: `Scan ${t.symbol || t.query || shortAddr(t.contract_address || "", 6, 4)}`, callback_data: `watch_scan:${t.id}` },
@@ -155,6 +192,7 @@ function buildWatchlistMenu(tokens) {
     disable_web_page_preview: true
   };
 }
+
 function buildTrendingMenu(items) {
   const keyboard = items.slice(0, 10).map((item) => [
     { text: `${item.baseToken?.symbol || "TOKEN"} | ${fmtUsd(item.liquidity?.usd)}`, callback_data: `trend_scan:${encodeURIComponent(item.pairAddress || item.baseToken?.address || "")}` }
@@ -166,6 +204,7 @@ function buildTrendingMenu(items) {
     disable_web_page_preview: true
   };
 }
+
 async function sendText(chatId, text, extra = {}) {
   return bot.sendMessage(chatId, text, {
     parse_mode: "HTML",
@@ -173,6 +212,7 @@ async function sendText(chatId, text, extra = {}) {
     ...extra
   });
 }
+
 async function editText(chatId, messageId, text, extra = {}) {
   return bot.editMessageText(text, {
     chat_id: chatId,
@@ -182,6 +222,7 @@ async function editText(chatId, messageId, text, extra = {}) {
     ...extra
   });
 }
+
 async function answerCb(id, text = "") {
   try {
     await bot.answerCallbackQuery(id, text ? { text, show_alert: false } : {});
@@ -189,6 +230,7 @@ async function answerCb(id, text = "") {
     // ignore
   }
 }
+
 async function initDb() {
   await run(`
     CREATE TABLE IF NOT EXISTS users (
@@ -203,6 +245,7 @@ async function initDb() {
       updated_at INTEGER NOT NULL
     )
   `);
+
   await run(`
     CREATE TABLE IF NOT EXISTS settings (
       chat_id TEXT PRIMARY KEY,
@@ -217,6 +260,7 @@ async function initDb() {
       updated_at INTEGER NOT NULL
     )
   `);
+
   await run(`
     CREATE TABLE IF NOT EXISTS watchlist (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -234,6 +278,7 @@ async function initDb() {
       updated_at INTEGER NOT NULL
     )
   `);
+
   await run(`
     CREATE TABLE IF NOT EXISTS wallet_tracks (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -249,6 +294,7 @@ async function initDb() {
       updated_at INTEGER NOT NULL
     )
   `);
+
   await run(`
     CREATE TABLE IF NOT EXISTS referrals (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -258,10 +304,12 @@ async function initDb() {
       created_at INTEGER NOT NULL
     )
   `);
+
   await run(`
     CREATE UNIQUE INDEX IF NOT EXISTS idx_referrals_unique_pair
     ON referrals(referrer_chat_id, referred_chat_id)
   `);
+
   await run(`
     CREATE TABLE IF NOT EXISTS prompt_log (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -272,10 +320,12 @@ async function initDb() {
     )
   `);
 }
+
 async function ensureUser(msg) {
   const chatId = String(msg.chat.id);
   const ts = nowTs();
   const existing = await get(`SELECT * FROM users WHERE chat_id = ?`, [chatId]);
+
   if (!existing) {
     await run(
       `INSERT INTO users (chat_id, username, first_name, mode, expecting_input, ai_enabled, member_verified, created_at, updated_at)
@@ -288,8 +338,9 @@ async function ensureUser(msg) {
        SET username = ?, first_name = ?, updated_at = ?
        WHERE chat_id = ?`,
       [msg.from?.username || "", msg.from?.first_name || "", ts, chatId]
-  }
     );
+  }
+
   const settings = await get(`SELECT * FROM settings WHERE chat_id = ?`, [chatId]);
   if (!settings) {
     await run(
@@ -299,24 +350,30 @@ async function ensureUser(msg) {
     );
   }
 }
+
 async function setExpecting(chatId, value) {
   await run(`UPDATE users SET expecting_input = ?, updated_at = ? WHERE chat_id = ?`, [value, nowTs(), String(chatId)]);
 }
+
 async function setMode(chatId, mode) {
   await run(`UPDATE users SET mode = ?, updated_at = ? WHERE chat_id = ?`, [mode, nowTs(), String(chatId)]);
 }
+
 async function getUser(chatId) {
   return get(`SELECT * FROM users WHERE chat_id = ?`, [String(chatId)]);
 }
+
 async function getSettings(chatId) {
   return get(`SELECT * FROM settings WHERE chat_id = ?`, [String(chatId)]);
 }
+
 async function toggleSetting(chatId, field) {
   const row = await getSettings(chatId);
   const next = row && row[field] ? 0 : 1;
   await run(`UPDATE settings SET ${field} = ?, updated_at = ? WHERE chat_id = ?`, [next, nowTs(), String(chatId)]);
   return getSettings(chatId);
 }
+
 async function logPrompt(chatId, role, content) {
   await run(
     `INSERT INTO prompt_log (chat_id, role, content, created_at)
@@ -324,6 +381,7 @@ async function logPrompt(chatId, role, content) {
     [String(chatId), role, String(content).slice(0, 4000), nowTs()]
   );
 }
+
 async function getPromptHistory(chatId, limit = 8) {
   const rows = await all(
     `SELECT role, content FROM prompt_log
@@ -334,6 +392,7 @@ async function getPromptHistory(chatId, limit = 8) {
   );
   return rows.reverse();
 }
+
 async function verifyMembership(chatId) {
   if (!CHANNEL_USERNAME) return true;
   try {
@@ -346,6 +405,7 @@ async function verifyMembership(chatId) {
     return false;
   }
 }
+
 function mustJoinMessage() {
   const clean = CHANNEL_USERNAME.startsWith("@") ? CHANNEL_USERNAME : `@${CHANNEL_USERNAME}`;
   return [
@@ -357,6 +417,7 @@ function mustJoinMessage() {
     "After joining, press <b>Verify Access</b>."
   ].join("\n");
 }
+
 function buildVerifyButtons() {
   const url = CHANNEL_USERNAME
     ? `https://t.me/${String(CHANNEL_USERNAME).replace(/^@/, "")}`
@@ -366,20 +427,22 @@ function buildVerifyButtons() {
       inline_keyboard: [
         [{ text: "Join Channel", url }],
         [{ text: "Verify Access", callback_data: "verify_access" }]
-}
       ]
     },
     parse_mode: "HTML"
   };
+}
+
 async function enforceMembership(chatId) {
   if (!CHANNEL_USERNAME) return true;
   const ok = await verifyMembership(chatId);
   if (!ok) {
     await sendText(chatId, mustJoinMessage(), buildVerifyButtons());
-}
-  }
     return false;
+  }
   return true;
+}
+
 async function fetchDexSearch(query) {
   const q = encodeURIComponent(normalizeText(query));
   if (!q) return [];
@@ -387,11 +450,13 @@ async function fetchDexSearch(query) {
   const { data } = await axios.get(url, { timeout: 15000 });
   return Array.isArray(data?.pairs) ? data.pairs : [];
 }
+
 async function fetchDexByTokenAddress(address) {
   const url = `https://api.dexscreener.com/latest/dex/tokens/${encodeURIComponent(address)}`;
   const { data } = await axios.get(url, { timeout: 15000 });
   return Array.isArray(data?.pairs) ? data.pairs : [];
 }
+
 async function fetchTrendingPairs() {
   const url = `https://api.dexscreener.com/token-profiles/latest/v1`;
   try {
@@ -402,6 +467,7 @@ async function fetchTrendingPairs() {
     return [];
   }
 }
+
 function pickBestPair(pairs = []) {
   if (!pairs.length) return null;
   return [...pairs].sort((a, b) => {
@@ -410,11 +476,13 @@ function pickBestPair(pairs = []) {
     return safeNum(b?.volume?.h24) - safeNum(a?.volume?.h24);
   })[0];
 }
+
 function pairAgeMinutes(pair) {
   const created = safeNum(pair?.pairCreatedAt, 0);
   if (!created) return null;
   return Math.max(0, Math.floor((Date.now() - created) / 60000));
 }
+
 function buildSourceLines(pair) {
   const lines = [];
   if (pair?.url) lines.push(`DexScreener: ${pair.url}`);
@@ -424,6 +492,7 @@ function buildSourceLines(pair) {
   }
   return lines;
 }
+
 function deriveWhyItMatters(metrics) {
   const lines = [];
   if (metrics.liquidity < 5000) lines.push("Low liquidity means exits can get ugly fast.");
@@ -434,9 +503,11 @@ function deriveWhyItMatters(metrics) {
   if (!lines.length) lines.push("This pair has a more neutral profile right now, so focus on timing, liquidity quality, and continued flow.");
   return lines;
 }
+
 function scorePair(pair) {
   const warnings = [];
   const strengths = [];
+
   const liquidity = safeNum(pair?.liquidity?.usd, 0);
   const marketCap = safeNum(pair?.marketCap || pair?.fdv, 0);
   const volume24 = safeNum(pair?.volume?.h24, 0);
@@ -446,7 +517,9 @@ function scorePair(pair) {
   const priceChange1h = safeNum(pair?.priceChange?.h1, 0);
   const priceChange24h = safeNum(pair?.priceChange?.h24, 0);
   const ageMin = pairAgeMinutes(pair);
+
   let score = 55;
+
   if (liquidity >= 100000) {
     score += 15;
     strengths.push("Strong liquidity base");
@@ -457,6 +530,7 @@ function scorePair(pair) {
     score -= 18;
     warnings.push("Very low liquidity");
   }
+
   if (marketCap > 0 && liquidity > 0) {
     const liqToCap = liquidity / marketCap;
     if (liqToCap >= 0.12) {
@@ -467,18 +541,22 @@ function scorePair(pair) {
       warnings.push("Thin liquidity versus market cap");
     }
   }
+
   if (volume24 > liquidity * 3 && liquidity > 0) {
     strengths.push("Strong volume relative to liquidity");
     score += 4;
   }
+
   if (Math.abs(priceChange5m) > 35) {
     warnings.push("Violent short-term price swing");
     score -= 8;
   }
+
   if (priceChange1h < -35 || priceChange24h < -70) {
     warnings.push("Heavy downside pressure");
     score -= 10;
   }
+
   if (sells24 > buys24 * 1.8 && sells24 > 30) {
     warnings.push("Sell pressure outweighs buys");
     score -= 8;
@@ -486,6 +564,7 @@ function scorePair(pair) {
     strengths.push("Buy pressure stronger than sells");
     score += 6;
   }
+
   if (ageMin !== null) {
     if (ageMin <= 20) {
       warnings.push("Very early launch - highest volatility zone");
@@ -495,7 +574,9 @@ function scorePair(pair) {
       score += 2;
     }
   }
+
   score = Math.max(1, Math.min(99, score));
+
   let verdict = "Caution";
   let recommendation = "Proceed carefully. Use small size and monitor liquidity.";
   if (score >= 75) {
@@ -505,6 +586,7 @@ function scorePair(pair) {
     verdict = "High Risk";
     recommendation = "Avoid chasing unless you are deliberately trading extreme risk.";
   }
+
   return {
     score,
     verdict,
@@ -514,11 +596,13 @@ function scorePair(pair) {
     whyItMatters: deriveWhyItMatters({ liquidity, marketCap, volume24, buys24, sells24, ageMin })
   };
 }
+
 function buildScanCard(pair, userMode = "balanced") {
   const score = scorePair(pair);
   const base = pair?.baseToken || {};
   const quote = pair?.quoteToken || {};
   const ageMin = pairAgeMinutes(pair);
+
   const lines = [
     "<b>GorKtimus Risk Verdict</b>",
     "",
@@ -546,10 +630,12 @@ function buildScanCard(pair, userMode = "balanced") {
     `5M / 1H / 24H: <b>${fmtPct(pair?.priceChange?.m5)}</b> / <b>${fmtPct(pair?.priceChange?.h1)}</b> / <b>${fmtPct(pair?.priceChange?.h24)}</b>`,
     `Age: <b>${ageMin === null ? "Unknown" : `${fmtInt(ageMin)} min`}</b>`
   ];
+
   if (userMode !== "fast") {
     lines.push("", "<b>Why It Matters</b>");
     for (const item of score.whyItMatters) lines.push(`- ${escapeHtml(item)}`);
   }
+
   if (userMode === "deep") {
     lines.push(
       "",
@@ -561,24 +647,29 @@ function buildScanCard(pair, userMode = "balanced") {
       `Txn 1H Buys/Sells: <b>${fmtInt(pair?.txns?.h1?.buys)}/${fmtInt(pair?.txns?.h1?.sells)}</b>`
     );
   }
+
   const sources = buildSourceLines(pair);
   if (sources.length) {
     lines.push("", "<b>Sources</b>");
     for (const item of sources) lines.push(escapeHtml(item));
   }
+
   return lines.join("\n");
 }
+
 async function scanToken(query) {
   const looksLikeAddress = /^[A-Za-z0-9]{20,}$/.test(query.trim());
   const pairs = looksLikeAddress ? await fetchDexByTokenAddress(query.trim()) : await fetchDexSearch(query.trim());
   const bestPair = pickBestPair(pairs);
   return { bestPair, pairs };
 }
+
 async function upsertWatchlist(chatId, query, bestPair, riskScore) {
   const existing = await get(
     `SELECT * FROM watchlist WHERE chat_id = ? AND (contract_address = ? OR query = ?) AND active = 1 LIMIT 1`,
     [String(chatId), bestPair?.baseToken?.address || "", query]
   );
+
   const ts = nowTs();
   if (existing) {
     await run(
@@ -600,6 +691,7 @@ async function upsertWatchlist(chatId, query, bestPair, riskScore) {
     );
     return existing.id;
   }
+
   const result = await run(
     `INSERT INTO watchlist
      (chat_id, query, symbol, contract_address, chain_id, pair_address, last_price, last_liquidity, last_risk_score, active, created_at, updated_at)
@@ -620,11 +712,14 @@ async function upsertWatchlist(chatId, query, bestPair, riskScore) {
   );
   return result.lastID;
 }
+
 async function removeWatchlist(chatId, watchId) {
   await run(`UPDATE watchlist SET active = 0, updated_at = ? WHERE id = ? AND chat_id = ?`, [nowTs(), watchId, String(chatId)]);
 }
+
 async function addWalletTrack(chatId, wallet, labelType, nickname) {
   const ts = nowTs();
+
   if (!hasHelius()) {
     await sendText(chatId, [
       "<b>GorKtimus Intelligence Terminal</b>",
@@ -634,6 +729,7 @@ async function addWalletTrack(chatId, wallet, labelType, nickname) {
     ].join("\n"), buildMainMenu());
     return;
   }
+
   if (!isLikelySolanaWallet(wallet)) {
     await sendText(chatId, [
       "<b>GorKtimus Intelligence Terminal</b>",
@@ -642,12 +738,14 @@ async function addWalletTrack(chatId, wallet, labelType, nickname) {
     ].join("\n"), buildMainMenu());
     return;
   }
+
   await run(
     `INSERT INTO wallet_tracks
      (chat_id, wallet, label_type, nickname, chain_id, active, alerts_enabled, created_at, updated_at)
      VALUES (?, ?, ?, ?, 'solana', 1, 1, ?, ?)`,
     [String(chatId), wallet.trim(), labelType, nickname.trim(), ts, ts]
   );
+
   await sendText(chatId, [
     "<b>Wallet Tracking Added</b>",
     "",
@@ -656,27 +754,34 @@ async function addWalletTrack(chatId, wallet, labelType, nickname) {
     `Nickname: <b>${escapeHtml(nickname.trim())}</b>`
   ].join("\n"), buildMainMenu());
 }
+
 async function fetchHeliusTransactions(wallet) {
   if (!hasHelius()) return [];
   const url = `https://api.helius.xyz/v0/addresses/${wallet}/transactions?api-key=${HELIUS_API_KEY}`;
   const { data } = await axios.get(url, { timeout: 15000 });
   return Array.isArray(data) ? data : [];
 }
+
 async function generateAssistantReply(chatId, prompt) {
   const history = await getPromptHistory(chatId, 6);
   const lower = prompt.toLowerCase();
+
   if (lower.includes("what is liquidity")) {
     return "Liquidity is the real exit fuel. A token can show hype and market cap, but if liquidity is thin, getting out clean gets hard fast.";
   }
+
   if (lower.includes("what does market cap mean")) {
     return "Market cap is price multiplied by supply. It can look big on paper, but if liquidity is tiny, that market cap can be misleading in practice.";
   }
+
   if (lower.includes("why no data")) {
     return "No data usually means the pair is too new, not indexed yet, the symbol was too broad, or the source does not expose enough live pair detail yet.";
   }
+
   if (lower.includes("help") || lower.includes("how does this work")) {
-  }
     return "GorKtimus scans pair structure, liquidity, volume, pressure, and launch behavior to turn raw market data into a plain-language risk verdict.";
+  }
+
   const memory = history.map((m) => `${m.role.toUpperCase()}: ${m.content}`).join(" | ");
   return [
     "GorKtimus AI Assistant",
@@ -685,10 +790,11 @@ async function generateAssistantReply(chatId, prompt) {
     "I can explain scans, market structure, liquidity, sell pressure, launch risk, and how to use the terminal.",
     "",
     `Your question: "${prompt.slice(0, 200)}"`,
-}
     "",
     `Recent context: ${memory.slice(0, 500) || "No recent context yet."}`
   ].join("\n");
+}
+
 async function sendWelcome(chatId, refCode = "") {
   const intro = [
     "<b>GorKtimus Intelligence Terminal</b>",
@@ -702,9 +808,11 @@ async function sendWelcome(chatId, refCode = "") {
     "",
     "Use the menu below to scan tokens, track watchlist names, monitor wallets, and understand what the data actually means."
   ].join("\n");
+
   await sendText(chatId, intro, buildMainMenu());
   if (refCode) await registerReferral(chatId, refCode);
 }
+
 async function registerReferral(chatId, refCode) {
   try {
     const referrerId = String(refCode).replace(/^ref_/, "");
@@ -723,6 +831,7 @@ async function registerReferral(chatId, refCode) {
     console.error("registerReferral error:", err.message);
   }
 }
+
 async function sendTrending(chatId) {
   const raw = await fetchTrendingPairs();
   const items = raw
@@ -739,16 +848,20 @@ async function sendTrending(chatId) {
       volume: { h24: safeNum(x.volume24h, 0) },
       chainId: x.chainId || "solana"
     }));
+
   if (!items.length) {
     await sendText(chatId, "No trending data is available right now. Try again shortly.", buildMainMenu());
     return;
   }
+
   const lines = ["<b>Trending Snapshot</b>", ""];
   items.forEach((item, i) => {
     lines.push(`${i + 1}. <b>${escapeHtml(item.baseToken.symbol)}</b> - ${fmtUsd(item.liquidity.usd)} liquidity`);
   });
+
   await sendText(chatId, lines.join("\n"), buildTrendingMenu(items));
 }
+
 async function sendWatchlist(chatId) {
   const rows = await all(`SELECT * FROM watchlist WHERE chat_id = ? AND active = 1 ORDER BY updated_at DESC LIMIT 10`, [String(chatId)]);
   if (!rows.length) {
@@ -760,19 +873,23 @@ async function sendWatchlist(chatId) {
     ].join("\n"), buildMainMenu());
     return;
   }
+
   const lines = ["<b>Your Watchlist</b>", ""];
   for (const row of rows) {
     lines.push(
       `- <b>${escapeHtml(row.symbol || row.query)}</b> | Risk ${safeNum(row.last_risk_score, 0).toFixed(0)}/99 | Price ${fmtUsd(row.last_price)}`
-}
-  }
     );
+  }
+
   await sendText(chatId, lines.join("\n"), buildWatchlistMenu(rows));
+}
+
 async function sendReferrals(chatId) {
   const count = await get(`SELECT COUNT(*) as total FROM referrals WHERE referrer_chat_id = ?`, [String(chatId)]);
   const code = `ref_${chatId}`;
   const botName = await bot.getMe();
   const link = `https://t.me/${botName.username}?start=${code}`;
+
   await sendText(chatId, [
     "<b>Referral Hub</b>",
     "",
@@ -782,6 +899,7 @@ async function sendReferrals(chatId) {
     "Share your link. New users are tracked when they launch the bot through your code."
   ].join("\n"), buildMainMenu());
 }
+
 async function sendHelp(chatId) {
   await sendText(chatId, [
     "<b>How GorKtimus Works</b>",
@@ -799,6 +917,7 @@ async function sendHelp(chatId) {
     "- explain buy vs sell pressure"
   ].join("\n"), buildMainMenu());
 }
+
 async function sendSettings(chatId) {
   const user = await getUser(chatId);
   await sendText(chatId, [
@@ -811,6 +930,7 @@ async function sendSettings(chatId) {
     `Current Mode: <b>${escapeHtml(user?.mode || "balanced")}</b>`
   ].join("\n"), buildModeButtons(user?.mode || "balanced"));
 }
+
 async function sendAlerts(chatId) {
   const settings = await getSettings(chatId);
   await sendText(chatId, [
@@ -823,49 +943,59 @@ async function sendAlerts(chatId) {
     "Toggle what you want active below."
   ].join("\n"), buildAlertsMenu(settings));
 }
+
 async function runScanAndRespond(chatId, query, addToWatchlist = false) {
   const user = await getUser(chatId);
   const { bestPair } = await scanToken(query);
+
   if (!bestPair) {
     await sendText(chatId, [
       "<b>No Pair Found</b>",
       "",
       "I could not find a usable pair from that query.",
       "Try a ticker, contract address, or more precise token name."
-  }
     ].join("\n"), buildMainMenu());
     return;
+  }
+
   const card = buildScanCard(bestPair, user?.mode || "balanced");
   const score = scorePair(bestPair);
+
   const buttons = {
     reply_markup: {
       inline_keyboard: [
         [
           { text: "Add to Watchlist", callback_data: `add_watch:${encodeURIComponent(query)}` },
-      ]
           { text: "Rescan", callback_data: `rescan:${encodeURIComponent(query)}` }
         ],
         buildBackMenuRow()
+      ]
     },
     parse_mode: "HTML",
     disable_web_page_preview: true
   };
+
   await sendText(chatId, card, buttons);
+
   if (addToWatchlist) {
     await upsertWatchlist(chatId, query, bestPair, score.score);
   }
 }
+
 async function handleFreeText(msg) {
   const chatId = msg.chat.id;
   const text = normalizeText(msg.text || "");
   const user = await getUser(chatId);
+
   if (!text) return;
   if (!(await enforceMembership(chatId))) return;
+
   if (user?.expecting_input === "scan_query") {
     await setExpecting(chatId, null);
     await runScanAndRespond(chatId, text, false);
     return;
   }
+
   if (user?.expecting_input === "wallet_add") {
     await setExpecting(chatId, null);
     const parts = text.split("|").map((x) => x.trim());
@@ -875,6 +1005,7 @@ async function handleFreeText(msg) {
     await addWalletTrack(chatId, wallet, labelType, nickname);
     return;
   }
+
   if (user?.expecting_input === "ai_prompt") {
     await setExpecting(chatId, null);
     await logPrompt(chatId, "user", text);
@@ -883,10 +1014,12 @@ async function handleFreeText(msg) {
     await sendText(chatId, escapeHtml(reply), buildMainMenu());
     return;
   }
+
   if (text.startsWith("/scan ")) {
     await runScanAndRespond(chatId, text.replace("/scan ", "").trim(), false);
     return;
   }
+
   if (text.startsWith("/ai ")) {
     const prompt = text.replace("/ai ", "").trim();
     await logPrompt(chatId, "user", prompt);
@@ -895,6 +1028,7 @@ async function handleFreeText(msg) {
     await sendText(chatId, escapeHtml(reply), buildMainMenu());
     return;
   }
+
   await sendText(chatId, [
     "<b>GorKtimus Terminal</b>",
     "",
@@ -904,6 +1038,7 @@ async function handleFreeText(msg) {
     "<code>/ai ask_question_here</code>"
   ].join("\n"), buildMainMenu());
 }
+
 async function monitorWatchlistLoop() {
   while (true) {
     try {
@@ -912,22 +1047,27 @@ async function monitorWatchlistLoop() {
         const settings = await getSettings(row.chat_id);
         const user = await getUser(row.chat_id);
         if (!user || !settings) continue;
+
         const query = row.contract_address || row.query;
         const { bestPair } = await scanToken(query);
         if (!bestPair) continue;
+
         const newPrice = safeNum(bestPair.priceUsd, 0);
         const newLiquidity = safeNum(bestPair?.liquidity?.usd, 0);
         const priceDelta = Math.abs(pctChange(row.last_price, newPrice));
         const liqDelta = Math.abs(pctChange(row.last_liquidity, newLiquidity));
         const risk = scorePair(bestPair);
+
         const shouldPrice = settings.price_alerts && priceDelta >= safeNum(settings.price_alert_pct, DEFAULT_ALERT_PCT);
         const shouldLiq = settings.liq_alerts && liqDelta >= safeNum(settings.liq_alert_pct, DEFAULT_LIQ_ALERT_PCT);
         const shouldRisk = settings.risk_alerts && Math.abs(risk.score - safeNum(row.last_risk_score, risk.score)) >= 12;
+
         if (shouldPrice || shouldLiq || shouldRisk) {
           const reasons = [];
           if (shouldPrice) reasons.push(`price moved ${fmtPct(priceDelta)}`);
           if (shouldLiq) reasons.push(`liquidity moved ${fmtPct(liqDelta)}`);
           if (shouldRisk) reasons.push(`risk score shifted to ${risk.score}/99`);
+
           await sendText(row.chat_id, [
             "<b>Watchlist Alert</b>",
             "",
@@ -937,6 +1077,7 @@ async function monitorWatchlistLoop() {
             buildScanCard(bestPair, user.mode || "balanced")
           ].join("\n"), buildMainMenu());
         }
+
         await run(
           `UPDATE watchlist
            SET symbol = ?, contract_address = ?, pair_address = ?, chain_id = ?, last_price = ?, last_liquidity = ?, last_risk_score = ?, updated_at = ?
@@ -953,6 +1094,7 @@ async function monitorWatchlistLoop() {
             row.id
           ]
         );
+
         await sleep(350);
       }
     } catch (err) {
@@ -961,6 +1103,7 @@ async function monitorWatchlistLoop() {
     await sleep(60000);
   }
 }
+
 async function monitorWalletLoop() {
   while (true) {
     try {
@@ -981,19 +1124,21 @@ async function monitorWalletLoop() {
               `Wallet: <code>${escapeHtml(shortAddr(row.wallet, 8, 6))}</code>`,
               `Latest Signature: <code>${escapeHtml(shortAddr(sig, 10, 8))}</code>`
             ].join("\n"), buildMainMenu());
+
             await run(`UPDATE wallet_tracks SET last_seen_signature = ?, updated_at = ? WHERE id = ?`, [sig, nowTs(), row.id]);
           }
         } catch (err) {
           console.error("wallet row error:", err.message);
         }
-      }
         await sleep(350);
+      }
     } catch (err) {
       console.error("monitorWalletLoop error:", err.message);
     }
     await sleep(90000);
   }
 }
+
 bot.onText(/^\/start(?:\s+(.+))?$/, async (msg, match) => {
   try {
     await ensureUser(msg);
@@ -1005,6 +1150,7 @@ bot.onText(/^\/start(?:\s+(.+))?$/, async (msg, match) => {
     console.error("/start error:", err.message);
   }
 });
+
 bot.onText(/^\/menu$/, async (msg) => {
   try {
     await ensureUser(msg);
@@ -1014,6 +1160,7 @@ bot.onText(/^\/menu$/, async (msg) => {
     console.error("/menu error:", err.message);
   }
 });
+
 bot.onText(/^\/help$/, async (msg) => {
   try {
     await ensureUser(msg);
@@ -1023,6 +1170,7 @@ bot.onText(/^\/help$/, async (msg) => {
     console.error("/help error:", err.message);
   }
 });
+
 bot.on("message", async (msg) => {
   try {
     if (!msg.text || msg.text.startsWith("/start") || msg.text === "/menu" || msg.text === "/help") return;
@@ -1032,19 +1180,23 @@ bot.on("message", async (msg) => {
     console.error("message handler error:", err.message);
   }
 });
+
 bot.on("callback_query", async (query) => {
   const chatId = query.message?.chat?.id;
   const messageId = query.message?.message_id;
   const data = query.data || "";
+
   if (!chatId || !messageId) {
     await answerCb(query.id);
     return;
   }
+
   try {
     if (!(await enforceMembership(chatId))) {
       await answerCb(query.id);
       return;
     }
+
     if (data === "verify_access") {
       const ok = await verifyMembership(chatId);
       if (ok) {
@@ -1055,35 +1207,41 @@ bot.on("callback_query", async (query) => {
       }
       return;
     }
+
     if (data === "main_menu") {
       await answerCb(query.id);
       await editText(chatId, messageId, "<b>GorKtimus Main Menu</b>\n\nChoose your command center below.", buildMainMenu());
       return;
     }
+
     if (data === "menu_scan") {
       await setExpecting(chatId, "scan_query");
       await answerCb(query.id);
       await editText(chatId, messageId, "Send a token ticker, token name, or contract address to scan.", {
-    }
         reply_markup: { inline_keyboard: [buildBackMenuRow()] },
         parse_mode: "HTML"
       });
       return;
+    }
+
     if (data === "menu_trending") {
       await answerCb(query.id);
       await sendTrending(chatId);
       return;
     }
+
     if (data === "menu_watchlist") {
       await answerCb(query.id);
       await sendWatchlist(chatId);
       return;
     }
+
     if (data === "menu_alerts") {
       await answerCb(query.id);
       await sendAlerts(chatId);
       return;
     }
+
     if (data === "menu_wallets") {
       await setExpecting(chatId, "wallet_add");
       await answerCb(query.id);
@@ -1098,6 +1256,7 @@ bot.on("callback_query", async (query) => {
       });
       return;
     }
+
     if (data === "menu_ai") {
       await setExpecting(chatId, "ai_prompt");
       await answerCb(query.id);
@@ -1107,21 +1266,25 @@ bot.on("callback_query", async (query) => {
       });
       return;
     }
+
     if (data === "menu_settings") {
       await answerCb(query.id);
       await sendSettings(chatId);
       return;
     }
+
     if (data === "menu_help") {
       await answerCb(query.id);
       await sendHelp(chatId);
       return;
     }
+
     if (data === "menu_referrals") {
       await answerCb(query.id);
       await sendReferrals(chatId);
       return;
     }
+
     if (data === "mode_fast" || data === "mode_balanced" || data === "mode_deep") {
       const nextMode = data.replace("mode_", "");
       await setMode(chatId, nextMode);
@@ -1129,33 +1292,39 @@ bot.on("callback_query", async (query) => {
       await editText(chatId, messageId, `Mode updated to <b>${escapeHtml(nextMode)}</b>.`, buildModeButtons(nextMode));
       return;
     }
+
     if (data === "toggle_alert_price") {
       const settings = await toggleSetting(chatId, "price_alerts");
       await answerCb(query.id);
       await editText(chatId, messageId, "<b>Alerts Control Center</b>\n\nToggle what you want active below.", buildAlertsMenu(settings));
       return;
     }
+
     if (data === "toggle_alert_liq") {
       const settings = await toggleSetting(chatId, "liq_alerts");
       await answerCb(query.id);
       await editText(chatId, messageId, "<b>Alerts Control Center</b>\n\nToggle what you want active below.", buildAlertsMenu(settings));
       return;
     }
+
     if (data === "toggle_alert_risk") {
       const settings = await toggleSetting(chatId, "risk_alerts");
       await answerCb(query.id);
       await editText(chatId, messageId, "<b>Alerts Control Center</b>\n\nToggle what you want active below.", buildAlertsMenu(settings));
       return;
     }
+
     if (data === "toggle_alert_wallet") {
       const settings = await toggleSetting(chatId, "wallet_alerts");
       await answerCb(query.id);
       await editText(chatId, messageId, "<b>Alerts Control Center</b>\n\nToggle what you want active below.", buildAlertsMenu(settings));
-    }
       return;
+    }
+
     if (data.startswith && false) {
       // placeholder to keep linter calm in some editors
     }
+
     if (data.startsWith("add_watch:")) {
       const q = decodeURIComponent(data.split(":")[1] || "");
       const { bestPair } = await scanToken(q);
@@ -1168,18 +1337,21 @@ bot.on("callback_query", async (query) => {
       }
       return;
     }
+
     if (data.startsWith("rescan:")) {
       const q = decodeURIComponent(data.split(":")[1] || "");
       await answerCb(query.id, "Rescanning");
       await runScanAndRespond(chatId, q, false);
       return;
     }
+
     if (data.startsWith("trend_scan:")) {
       const address = decodeURIComponent(data.split(":")[1] || "");
       await answerCb(query.id, "Scanning token");
       await runScanAndRespond(chatId, address, false);
       return;
     }
+
     if (data.startsWith("watch_scan:")) {
       const watchId = Number(data.split(":")[1] || 0);
       const row = await get(`SELECT * FROM watchlist WHERE id = ? AND chat_id = ?`, [watchId, String(chatId)]);
@@ -1191,6 +1363,7 @@ bot.on("callback_query", async (query) => {
       }
       return;
     }
+
     if (data.startsWith("watch_remove:")) {
       const watchId = Number(data.split(":")[1] || 0);
       await removeWatchlist(chatId, watchId);
@@ -1198,41 +1371,50 @@ bot.on("callback_query", async (query) => {
       await sendWatchlist(chatId);
       return;
     }
+
     await answerCb(query.id);
   } catch (err) {
     console.error("callback_query error:", err.message);
     await answerCb(query.id, "Something went wrong");
   }
 });
+
 process.on("SIGINT", () => {
   console.log("Shutting down...");
   db.close();
   process.exit(0);
 });
+
 process.on("SIGTERM", () => {
   console.log("Shutting down...");
   db.close();
   process.exit(0);
 });
+
 process.on("unhandledRejection", (err) => {
   console.error("Unhandled rejection:", err);
 });
+
 process.on("uncaughtException", (err) => {
   console.error("Uncaught exception:", err);
 });
+
 async function bootstrap() {
   await initDb();
+
   try {
     await bot.deleteWebHook();
     console.log("Webhook cleared");
   } catch (err) {
-  }
     console.error("Webhook clear warning:", err.message);
+  }
+
   console.log("GorKtimus New Update booting...");
   monitorWatchlistLoop().catch((err) => console.error("watchlist loop fatal:", err.message));
   monitorWalletLoop().catch((err) => console.error("wallet loop fatal:", err.message));
 }
+
 bootstrap().catch((err) => {
   console.error("Fatal bootstrap error:", err);
   process.exit(1);
-})
+});
