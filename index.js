@@ -1,6 +1,6 @@
 const TelegramBot = require("node-telegram-bot-api");
 const axios = require("axios");
-const sqlite3 = require("sqlite3").verbose();
+const sqlite3 = require("sqlite3").verbsqliteose();
 const path = require("path");
 const fs = require("fs");
 
@@ -72,30 +72,7 @@ function run(sql, params = []) {
     });
   });
 }
-async function sendTrending(chatId) {
-  await showTrending(chatId);
-}
 
-async function sendWatchlist(chatId) {
-  await showWatchlist(chatId);
-}
-
-async function showLaunchRadar(chatId) {
-  await sendText(
-    chatId,
-    "<b>Launch Radar</b>\n\nThis section is for early launch detection, first-minutes monitoring, and fresh token opportunity tracking.",
-    buildMainMenu()
-  );
-}
-
-async function safeFetchEvmHoneypot(address) {
-  try {
-    return await fetchEvmHoneypot(address);
-  } catch (err) {
-    console.error("fetchEvmHoneypot final failure:", err.message);
-    return null;
-  }
-}
 function get(sql, params = []) {
   return new Promise((resolve, reject) => {
     db.get(sql, params, function (err, row) {
@@ -113,25 +90,129 @@ function all(sql, params = []) {
     });
   });
 }
+
+// ================= SAFE UI HELPERS =================
+async function showMainMenu(chatId) {
+  await sendText(
+    chatId,
+    "<b>GorKtimus Main Menu</b>\n\nChoose your command center below.",
+    buildMainMenu()
+  );
+}
+
+async function promptScanToken(chatId) {
+  await setExpecting(chatId, "scan_query");
+  await sendText(
+    chatId,
+    "Send a token ticker, token name, or contract address to scan.",
+    {
+      reply_markup: {
+        inline_keyboard: [buildBackMenuRow()]
+      },
+      parse_mode: "HTML"
+    }
+  );
+}
+
+async function trackUserActivity(chatId) {
+  try {
+    await run(
+      `UPDATE users SET updated_at = ? WHERE chat_id = ?`,
+      [Date.now(), String(chatId)]
+    );
+  } catch (err) {
+    console.error("trackUserActivity error:", err.message);
+  }
+}
+
+// ================= WRAPPER HELPERS =================
+// IMPORTANT: these should NOT call each other back and forth forever
+
+async function showTrending(chatId) {
+  await sendText(
+    chatId,
+    "<b>Trending</b>\n\nTrending tokens will show here.",
+    buildMainMenu()
+  );
+}
+
+async function sendTrending(chatId) {
+  await showTrending(chatId);
+}
+
+async function showWatchlist(chatId) {
+  await sendText(
+    chatId,
+    "<b>Watchlist</b>\n\nYour saved tokens will show here.",
+    buildMainMenu()
+  );
+}
+
+async function sendWatchlist(chatId) {
+  await showWatchlist(chatId);
+}
+
+async function showAlertCenter(chatId) {
+  await sendText(
+    chatId,
+    "<b>Alert Center</b>\n\nYour alert controls will show here.",
+    buildMainMenu()
+  );
+}
+
+async function sendAlerts(chatId) {
+  await showAlertCenter(chatId);
+}
+
+async function showLaunchRadar(chatId) {
+  await sendText(
+    chatId,
+    "<b>Launch Radar</b>\n\nThis section is for early launch detection, first-minutes monitoring, and fresh token opportunity tracking.",
+    buildMainMenu()
+  );
+}
+
+async function showEdgeBrain(chatId) {
+  await sendText(
+    chatId,
+    "<b>Gorktimus Edge</b>\n\nGorktimus Edge is the terminal’s deep defense engine — built to detect traps, read token behavior, analyze launch patterns, and turn raw market data into plain-language risk warnings and smarter trading insight.",
+    buildMainMenu()
+  );
+}
+
+// ================= SAFE DATA HELPERS =================
+async function safeFetchEvmHoneypot(address) {
+  try {
+    return await fetchEvmHoneypot(address);
+  } catch (err) {
+    console.error("fetchEvmHoneypot final failure:", err.message);
+    return null;
+  }
+}
+
 async function setExpecting(chatId, value) {
   await run(
     `UPDATE users SET expecting_input = ?, updated_at = ? WHERE chat_id = ?`,
     [value, Date.now(), String(chatId)]
   );
 }
-async function initDb() {await run(`
-  CREATE TABLE IF NOT EXISTS user_activity (
-    user_id TEXT,
-    ts INTEGER
-  )
-`);
 
-await run(`
-  CREATE TABLE IF NOT EXISTS scan_logs (
-    user_id TEXT,
-    ts INTEGER
-  )
-`);
+// ================= DB INIT =================
+async function initDb() {
+  await run(`
+    CREATE TABLE IF NOT EXISTS user_activity (
+      user_id TEXT,
+      ts INTEGER
+    )
+  `);
+
+  await run(`
+    CREATE TABLE IF NOT EXISTS scan_logs (
+      user_id TEXT,
+      ts INTEGER
+    )
+  `);
+
   await run(`
     CREATE TABLE IF NOT EXISTS wallet_tracks (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -160,11 +241,12 @@ await run(`
   await run(`
     CREATE TABLE IF NOT EXISTS users (
       user_id TEXT PRIMARY KEY,
-      chat_id TEXT,
+      chat_id TEXT UNIQUE,
       username TEXT,
       first_name TEXT,
       last_name TEXT,
       is_subscribed INTEGER DEFAULT 0,
+      expecting_input TEXT,
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL
     )
@@ -235,8 +317,20 @@ await run(`
       created_at INTEGER NOT NULL
     )
   `);
-}
 
+  // Add missing columns safely for older databases
+  try {
+    await run(`ALTER TABLE users ADD COLUMN expecting_input TEXT`);
+  } catch (_) {}
+
+  try {
+    await run(`ALTER TABLE users ADD COLUMN updated_at INTEGER`);
+  } catch (_) {}
+
+  try {
+    await run(`ALTER TABLE users ADD COLUMN chat_id TEXT`);
+  } catch (_) {}
+}
 // ================= HELPERS =================
 function nowTs() {
   return Math.floor(Date.now() / 1000);
