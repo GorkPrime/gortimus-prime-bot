@@ -110,6 +110,7 @@ function buildMainMenu() {
     disable_web_page_preview: true
   };
 }
+}
 function buildBackMenuRow() {
   return [{ text: "Main Menu", callback_data: "main_menu" }];
 }
