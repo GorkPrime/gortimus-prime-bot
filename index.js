@@ -1,13 +1,5 @@
 
- * Required env:
- * TELEGRAM_BOT_TOKEN=...
- * CHANNEL_USERNAME=@yourchannel            // optional membership gate
- * HELIUS_API_KEY=...                       // optional wallet tracking
- * OPENAI_API_KEY=...                       // optional future AI mode
- * DEFAULT_ALERT_PCT=5
- * DEFAULT_LIQ_ALERT_PCT=10
- * ALERT_COOLDOWN_SECONDS=900
- */
+
 "use strict";
 const path = require("path");
 const crypto = require("crypto");
