@@ -72,7 +72,30 @@ function run(sql, params = []) {
     });
   });
 }
+async function sendTrending(chatId) {
+  await showTrending(chatId);
+}
 
+async function sendWatchlist(chatId) {
+  await showWatchlist(chatId);
+}
+
+async function showLaunchRadar(chatId) {
+  await sendText(
+    chatId,
+    "<b>Launch Radar</b>\n\nThis section is for early launch detection, first-minutes monitoring, and fresh token opportunity tracking.",
+    buildMainMenu()
+  );
+}
+
+async function safeFetchEvmHoneypot(address) {
+  try {
+    return await fetchEvmHoneypot(address);
+  } catch (err) {
+    console.error("fetchEvmHoneypot final failure:", err.message);
+    return null;
+  }
+}
 function get(sql, params = []) {
   return new Promise((resolve, reject) => {
     db.get(sql, params, function (err, row) {
@@ -1355,10 +1378,11 @@ async function fetchHeliusTokenLargestAccounts(mintAddress) {
         return out;
       },
       {
-        attempts: 6,
-        baseDelay: 900,
-        maxDelay: 12000,
-        backoff: 2,
+       {
+  attempts: 2,
+  baseDelay: 5000,
+  maxDelay: 15000,
+  backoff: 2,
         shouldRetry: (err) => {
           const status = err?.response?.status;
           return [408, 425, 429, 500, 502, 503, 504].includes(status) ||
