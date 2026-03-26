@@ -328,10 +328,9 @@ async function ensureUser(msg) {
 
   if (!existing) {
     await run(
-      `INSERT INTO users (chat_id, username, first_name, mode, expecting_input, ai_enabled, member_verified, created_at, updated_at)
-       VALUES (?, ?, ?, 'balanced', NULL, 1, 0, ?, ?)`,
-      [chatId, msg.from?.username || "", msg.from?.first_name || "", ts, ts]
-    );
+  `INSERT OR IGNORE INTO users (chat_id, created_at) VALUES (?, ?)`,
+  [chatId, nowTs()]
+);
   } else {
     await run(
       `UPDATE users
