@@ -90,7 +90,12 @@ function all(sql, params = []) {
     });
   });
 }
-
+async function setExpecting(chatId, value) {
+  await run(
+    `UPDATE users SET expecting_input = ?, updated_at = ? WHERE chat_id = ?`,
+    [value, Date.now(), String(chatId)]
+  );
+}
 async function initDb() {await run(`
   CREATE TABLE IF NOT EXISTS user_activity (
     user_id TEXT,
@@ -378,7 +383,9 @@ function makeDexUrl(chainId, pairAddress, fallbackUrl = "") {
   if (!chainId || !pairAddress) return "";
   return `https://dexscreener.com/${encodeURIComponent(chainId)}/${encodeURIComponent(pairAddress)}`;
 }
-
+async function showTrending(chatId) {
+  await sendTrending(chatId);
+}
 function makeBirdeyeUrl(chainId, tokenAddress) {
   const chain = String(chainId || "").toLowerCase();
   const token = String(tokenAddress || "").trim();
@@ -394,7 +401,13 @@ function makeBirdeyeUrl(chainId, tokenAddress) {
   }
   return "";
 }
-
+async function showEdgeBrain(chatId) {
+  await sendText(
+    chatId,
+    "<b>GorKtimus Edge Brain</b>\n\nThis section will hold deeper defense logic, behavioral analysis, and advanced explanations.",
+    buildMainMenu()
+  );
+}
 function makeGeckoUrl(chainId, pairAddress) {
   const chain = String(chainId || "").toLowerCase();
   const pair = String(pairAddress || "").trim();
@@ -410,9 +423,13 @@ function makeGeckoUrl(chainId, pairAddress) {
   }
   return "";
 }
-
+async function showAlertCenter(chatId) {
+  await sendAlerts(chatId);
+}
 function getMsgChat(msgOrQuery) {
   return msgOrQuery?.message?.chat || msgOrQuery?.chat || null;
+}async function showWatchlist(chatId) {
+  await sendWatchlist(chatId);
 }
 async function showMainMenu(chatId) {
   await sendText(
