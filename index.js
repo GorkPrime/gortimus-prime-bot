@@ -1065,9 +1065,7 @@ process.once("SIGINT", () => shutdown("SIGINT"));
         (honeypotData?.contractCode || etherscanData ? 1 : 0),
       expected: 4
     };
-  }
-
-  let rawScore =
+    let rawScore =
     liquidity.score +
     age.score +
     flow.score +
@@ -1082,14 +1080,14 @@ process.once("SIGINT", () => shutdown("SIGINT"));
     rawScore += ageMin > 0 && ageMin < 120 ? 6 : 0;
     rawScore += num(pair.buysM5) > num(pair.sellsM5) ? 4 : 0;
     rawScore -= num(pair.liquidityUsd) < 15000 ? 2 : 0;
-  } if (mode === "guardian") {
+  } else if (mode === "guardian") {
     rawScore -= num(pair.liquidityUsd) < 25000 ? 6 : 0;
     rawScore -= holderTop5Pct >= 70 ? 8 : 0;
     rawScore -= isHoneypot === true ? 12 : 0;
     rawScore -= ageMin > 0 && ageMin < 30 ? 4 : 0;
   }
 
-  rawScore += clamp(num(memory.learned_bias), -12, 10);
+  rawScore += clamp(num(memory?.learned_bias || 0), -12, 10);
   rawScore = Math.max(0, Math.min(100, Math.round(rawScore)));
 
   const confidenceMeta = buildConfidenceMeta(sourceChecks, behavior.penalty);
