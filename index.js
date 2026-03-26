@@ -45,8 +45,19 @@ const db = new sqlite3.Database(DB_PATH);
 const bot = new TelegramBot(BOT_TOKEN, { polling: true });
 const pendingAction = new Map();
 let BOT_USERNAME = "";
-
+const callbackStore = new Map();
 // ================= DB HELPERS =================
+function makeShortCallback(action, payload) {
+  const id = Math.random().toString(36).slice(2, 10);
+  callbackStore.set(id, payload);
+  return `${action}:${id}`;
+}
+
+function getShortCallbackPayload(data) {
+  const parts = String(data || "").split(":");
+  const id = parts[1] || "";
+  return callbackStore.get(id) || null;
+}
 function run(sql, params = []) {
   return new Promise((resolve, reject) => {
     db.run(sql, params, function (err) {
