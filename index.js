@@ -29,19 +29,7 @@ const PUMP_RECENT_TRADES_LIMIT = 20;
 const PUMP_RECONNECT_DELAY_MS = 3000;
 
 const fs = require("fs");
-if (DEV_MODE && !isOwner(chatId)) {
-  await sendText(
-    chatId,
-    "🚧 Gorktimus is currently in private development mode."
-  );
-  return;
-}
-if (DEV_MODE && !isOwner(chatId)) {
-  await answerCallbackQuerySafe(bot, query.id, {
-    text: "Private development mode active.",
-    show_alert: false
-  });
-  return;
+
 }
 function isPrivateChat(msgOrQuery) {
   const chat =
@@ -2279,7 +2267,19 @@ bot.on("message", async (msg) => {
   try {
     if (!isPrivateChat(msg)) return;
     if (!msg?.from?.id || !msg?.chat?.id) return;
-    
+    if (DEV_MODE && !isOwner(chatId)) {
+  await sendText(
+    chatId,
+    "🚧 Gorktimus is currently in private development mode."
+  );
+  return;
+}
+if (DEV_MODE && !isOwner(chatId)) {
+  await answerCallbackQuerySafe(bot, query.id, {
+    text: "Private development mode active.",
+    show_alert: false
+  });
+  return;
     if (msg.text && msg.text.startsWith("/start")) return;
 
     const ok = await ensureSubscribedOrBlock(msg);
