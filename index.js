@@ -1158,10 +1158,11 @@ return null;
       uiAmount: num(x.uiAmountString ?? x.uiAmount ?? 0),
       decimals: num(x.decimals, 0)
     }));
-   catch (err) {
-    console.log("fetchHeliusTokenLargestAccounts error:", err?.response?.status || err.message);
-    return [];
-  }
+  } catch (err) {
+  console.log("fetchHeliusTokenLargestAccounts error:", err?.response?.status || err.message);
+  return [];
+}
+}
 
 async function fetchEvmHoneypot(address, chainId) {
   if (!address || !isEvmChain(chainId)) return null;
