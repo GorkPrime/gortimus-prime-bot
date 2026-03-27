@@ -2382,7 +2382,21 @@ So if a token is high on Dex but lower here, that usually means the terminal thi
   );
 }
     if (data === "help_score") {
-      return sendText(chatId, `🧠 <b>Safety Score</b>\n\nSafety Score blends liquidity, age, flow, transparency, holder structure, and trap risk into one defense-first read.`, buildHelpMenu());
+      return sendText(chatId, `🧠 <b>Safety Score</b>\n\n
+      The safety score is a live structured judgment, not a guarantee and not financial advice.`,
+    ``,
+    `The score weighs things like:`,
+    `• liquidity health`,
+    `• age / launch maturity`,
+    `• recent buy-vs-sell flow`,
+    `• volume quality`,
+    `• holder concentration`,
+    `• honeypot / tax clues`,
+    `• contract transparency`,
+    `• adaptive memory`,
+    `• current mode`, buildHelpMenu())
+
+                     ;
     }
 
     if (data === "help_transactions") {
