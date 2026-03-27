@@ -3,7 +3,14 @@ const axios = require("axios");
 const sqlite3 = require("sqlite3").verbose();
 const path = require("path");
 const fs = require("fs");
+function isPrivateChat(msgOrQuery) {
+  const chat =
+    msgOrQuery?.chat ||
+    msgOrQuery?.message?.chat ||
+    null;
 
+  return chat?.type === "private";
+}
 // ================= ENV =================
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const HELIUS_API_KEY = process.env.HELIUS_API_KEY || "";
@@ -2131,7 +2138,9 @@ bot.onText(/\/start/, async (msg) => {
 // ================= MESSAGE FLOW =================
 bot.on("message", async (msg) => {
   try {
+    if (!isPrivateChat(msg)) return;
     if (!msg?.from?.id || !msg?.chat?.id) return;
+    
     if (msg.text && msg.text.startsWith("/start")) return;
 
     const ok = await ensureSubscribedOrBlock(msg);
@@ -2213,9 +2222,10 @@ bot.on("callback_query", async (query) => {
   const userId = query?.from?.id;
   const data = String(query?.data || "");
 
-  if (!chatId || !userId) {
-    await answerCallbackSafe(query.id);
-    return;
+  if (!isPrivateChat(query)) {
+  await answerCallbackSafe(query.id);
+  return;
+}
   }
 
   try {
