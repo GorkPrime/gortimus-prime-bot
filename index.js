@@ -1,5 +1,10 @@
 const TelegramBot = require("node-telegram-bot-api");
 const axios = require("axios");
+const largestAccountsCache = new Map();
+const largestAccountsInflight = new Map();
+function jitter(ms) {
+  return Math.floor(Math.random() * ms);
+}
 const pairCache = new Map();
 
 function sleep(ms) {
@@ -58,11 +63,20 @@ const EVM_CHAIN_IDS = {
 const largestAccountsCache = new Map();
 const LARGEST_ACCOUNTS_TTL_MS = 60000;
 const db = new sqlite3.Database(DB_PATH);
+const HELIUS_MIN_SPACING_MS = 150;
+let lastHeliusRequestAt = 0;
 const bot = new TelegramBot(BOT_TOKEN, { polling: true });
 const pendingAction = new Map();
 let BOT_USERNAME = "";
 const callbackStore = new Map();
 // ================= DB HELPERS =================
+async function heliusThrottle() {
+  const now = Date.now();
+  const wait = Math.max(0, HELIUS_MIN_SPACING_MS - (now - lastHeliusRequestAt));
+  if (wait > 0) await sleep(wait);
+  lastHeliusRequestAt = Date.now();
+}
+
 function makeShortCallback(action, payload) {
   const id = Math.random().toString(36).slice(2, 10);
   callbackStore.set(id, payload);
@@ -241,36 +255,57 @@ async function fetchHeliusTokenLargestAccounts(mint) {
     return cached.data;
   }
 
-  let tries = 0;
-
-  while (tries < 4) {
-    try {
-      const res = await axios.post(HELIUS_RPC_URL, {
-        jsonrpc: "2.0",
-        id: "largest-accounts",
-        method: "getTokenLargestAccounts",
-        params: [mint]
-      }, {
-        timeout: 15000
-      });
-
-      const data = res.data?.result?.value || [];
-      largestAccountsCache.set(mint, { ts: now, data });
-      return data;
-    } catch (err) {
-      const status = err?.response?.status;
-
-      if (status === 429) {
-        tries += 1;
-        await sleep(1500 * tries);
-        continue;
-      }
-
-      throw err;
-    }
+  if (largestAccountsInflight.has(mint)) {
+    return await largestAccountsInflight.get(mint);
   }
 
-  return null;
+  const promise = (async () => {
+    let tries = 0;
+
+    while (tries < 5) {
+      try {
+        await heliusThrottle();
+
+        const res = await axios.post(
+          HELIUS_RPC_URL,
+          {
+            jsonrpc: "2.0",
+            id: "largest-accounts",
+            method: "getTokenLargestAccounts",
+            params: [mint]
+          },
+          {
+            timeout: 15000
+          }
+        );
+
+        const data = res.data?.result?.value || [];
+        largestAccountsCache.set(mint, { ts: Date.now(), data });
+        return data;
+      } catch (err) {
+        const status = err?.response?.status;
+
+        if (status === 429) {
+          tries += 1;
+          const waitMs = Math.min(1000 * (2 ** tries), 10000) + jitter(400);
+          await sleep(waitMs);
+          continue;
+        }
+
+        throw err;
+      }
+    }
+
+    return null;
+  })();
+
+  largestAccountsInflight.set(mint, promise);
+
+  try {
+    return await promise;
+  } finally {
+    largestAccountsInflight.delete(mint);
+  }
 }
 function nowTs() {
   return Math.floor(Date.now() / 1000);
