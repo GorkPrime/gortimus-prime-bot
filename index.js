@@ -1041,7 +1041,21 @@ async function fetchPairsByToken(chainId, tokenAddress) {
   return pairs.map(normalizePair).filter((p) => p && supportsChain(p.chainId));
 }
 
-async function resolveBestPair(query) {
+> gorktimus-prime-bot@1.0.0 start
+/app/index.js:1050
+> node index.js
+  const cached = pairCache.get(cacheKey);
+                 ^
+ReferenceError: pairCache is not defined
+    at resolveBestPair (/app/index.js:1050:18)
+    at runTokenScan (/app/index.js:1882:22)
+    at TelegramBot.<anonymous> (/app/index.js:2466:14)
+✅ Gorktimus online as @GorktimusPrime_bot
+Node.js v18.20.8
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+  async function resolveBestPair(query) {
   const q = String(query || "").trim();
   if (!q) return null;
 
