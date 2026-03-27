@@ -29,6 +29,14 @@ const PUMP_RECENT_TRADES_LIMIT = 20;
 const PUMP_RECONNECT_DELAY_MS = 3000;
 
 const fs = require("fs");
+if (DEV_MODE && !isOwner(chatId)) {
+  await sendText(
+    chatId,
+    "🚧 Gorktimus is currently in private development mode."
+  );
+  return;
+}
+
 function isPrivateChat(msgOrQuery) {
   const chat =
     msgOrQuery?.chat ||
