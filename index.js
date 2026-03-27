@@ -103,17 +103,6 @@ function all(sql, params = []) {
 // ================= CALLBACK HELPERS =================
 
 
-function makeShortCallback(action, payload) {
-  const id = Math.random().toString(36).slice(2, 10);
-  callbackStore.set(id, payload);
-  return `${action}:${id}`;
-}
-
-function getShortCallbackPayload(data) {
-  const parts = String(data || "").split(":");
-  const id = parts[1] || "";
-  return callbackStore.get(id) || null;
-}
 async function initDb() {
   await run(`
     CREATE TABLE IF NOT EXISTS users (
@@ -1156,39 +1145,7 @@ async function fetchTokenProfileImage(chainId, tokenAddress, fallbackPair = null
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
-async function fetchHeliusTokenLargestAccounts(mint) {
-  try {
-    const res = await axios.post(
-      HELIUS_RPC_URL,
-      {
-        jsonrpc: "2.0",
-        id: "largest-accounts",
-        method: "getTokenLargestAccounts",
-        params: [mint]
-      },
-      {
-        timeout: 15000
-      }
-    );
 
-    const rows = Array.isArray(res?.data?.result?.value)
-      ? res.data.result.value
-      : [];
-
-    return rows.map((x) => ({
-      address: String(x.address || ""),
-      amountRaw: String(x.amount || "0"),
-      uiAmount: num(x.uiAmountString ?? x.uiAmount ?? 0),
-      decimals: num(x.decimals, 0)
-    }));
-  } catch (err) {
-    console.log(
-      "fetchHeliusTokenLargestAccounts error:",
-      err?.response?.status || err.message
-    );
-    return [];
-  }
-}
 
 async function fetchEvmHoneypot(address, chainId) {
   if (!address || !isEvmChain(chainId)) return null;
