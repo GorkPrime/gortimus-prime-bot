@@ -1,5 +1,11 @@
 const TelegramBot = require("node-telegram-bot-api");
 const axios = require("axios");
+const pairCache = new Map();
+
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
 const sqlite3 = require("sqlite3").verbose();
 const path = require("path");
 const fs = require("fs");
