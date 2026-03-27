@@ -1,22 +1,5 @@
 const TelegramBot = require("node-telegram-bot-api");
-const OWNER_TELEGRAM_ID = 662870638;
-const DEV_MODE = true;
-
-
-
 const axios = require("axios");
-const liveTokenState = new Map();
-const WebSocket = require("ws");
-const tokenSnapshots = new Map()
-const liveTokenTxs = new Map();
-const activeBirdeyeSubscriptions = new Set();
-const LIVE_STATE_MAX_AGE_MS = 5000;
-const RECENT_TX_BUFFER_LIMIT = 25;
-const largestAccountsCache = new Map();
-const largestAccountsInflight = new Map();
-function jitter(ms) {
-  return Math.floor(Math.random() * ms);
-}
 const pairCache = new Map();
 
 function sleep(ms) {
@@ -25,12 +8,7 @@ function sleep(ms) {
 
 const sqlite3 = require("sqlite3").verbose();
 const path = require("path");
-const PUMP_RECENT_TRADES_LIMIT = 20;
-const PUMP_RECONNECT_DELAY_MS = 3000;
-
 const fs = require("fs");
-
-
 function isPrivateChat(msgOrQuery) {
   const chat =
     msgOrQuery?.chat ||
@@ -77,27 +55,14 @@ const EVM_CHAIN_IDS = {
 };
 
 // ================= GLOBALS =================
-
+const largestAccountsCache = new Map();
 const LARGEST_ACCOUNTS_TTL_MS = 60000;
 const db = new sqlite3.Database(DB_PATH);
-const HELIUS_MIN_SPACING_MS = 150;
-let lastHeliusRequestAt = 0;
 const bot = new TelegramBot(BOT_TOKEN, { polling: true });
 const pendingAction = new Map();
 let BOT_USERNAME = "";
 const callbackStore = new Map();
 // ================= DB HELPERS =================
-function isOwner(chatId) {
-  return String(chatId) === String(OWNER_TELEGRAM_ID);
-}
-
-async function heliusThrottle() {
-  const now = Date.now();
-  const wait = Math.max(0, HELIUS_MIN_SPACING_MS - (now - lastHeliusRequestAt));
-  if (wait > 0) await sleep(wait);
-  lastHeliusRequestAt = Date.now();
-}
-
 function makeShortCallback(action, payload) {
   const id = Math.random().toString(36).slice(2, 10);
   callbackStore.set(id, payload);
@@ -276,57 +241,36 @@ async function fetchHeliusTokenLargestAccounts(mint) {
     return cached.data;
   }
 
-  if (largestAccountsInflight.has(mint)) {
-    return await largestAccountsInflight.get(mint);
-  }
+  let tries = 0;
 
-  const promise = (async () => {
-    let tries = 0;
+  while (tries < 4) {
+    try {
+      const res = await axios.post(HELIUS_RPC_URL, {
+        jsonrpc: "2.0",
+        id: "largest-accounts",
+        method: "getTokenLargestAccounts",
+        params: [mint]
+      }, {
+        timeout: 15000
+      });
 
-    while (tries < 5) {
-      try {
-        await heliusThrottle();
+      const data = res.data?.result?.value || [];
+      largestAccountsCache.set(mint, { ts: now, data });
+      return data;
+    } catch (err) {
+      const status = err?.response?.status;
 
-        const res = await axios.post(
-          HELIUS_RPC_URL,
-          {
-            jsonrpc: "2.0",
-            id: "largest-accounts",
-            method: "getTokenLargestAccounts",
-            params: [mint]
-          },
-          {
-            timeout: 15000
-          }
-        );
-
-        const data = res.data?.result?.value || [];
-        largestAccountsCache.set(mint, { ts: Date.now(), data });
-        return data;
-      } catch (err) {
-        const status = err?.response?.status;
-
-        if (status === 429) {
-          tries += 1;
-          const waitMs = Math.min(1000 * (2 ** tries), 10000) + jitter(400);
-          await sleep(waitMs);
-          continue;
-        }
-
-        throw err;
+      if (status === 429) {
+        tries += 1;
+        await sleep(1500 * tries);
+        continue;
       }
+
+      throw err;
     }
-
-    return null;
-  })();
-
-  largestAccountsInflight.set(mint, promise);
-
-  try {
-    return await promise;
-  } finally {
-    largestAccountsInflight.delete(mint);
   }
+
+  return null;
 }
 function nowTs() {
   return Math.floor(Date.now() / 1000);
@@ -2264,36 +2208,10 @@ bot.onText(/\/start/, async (msg) => {
 
 // ================= MESSAGE FLOW =================
 bot.on("message", async (msg) => {
-   const chatId = msg.chat.id;
-
-  if (DEV_MODE) {
-    if (!isPrivateChat(msg)) return;
-
-    if (!isOwner(chatId)) {
-      await sendText(
-        chatId,
-        "🚧 Gorktimus is currently in private development mode."
-      );
-      return;
-    }
-  }
-  
   try {
     if (!isPrivateChat(msg)) return;
     if (!msg?.from?.id || !msg?.chat?.id) return;
-    if (DEV_MODE && !isOwner(chatId)) {
-  await sendText(
-    chatId,
-    "🚧 Gorktimus is currently in private development mode."
-  );
-  return;
-}
-if (DEV_MODE && !isOwner(chatId)) {
-  await answerCallbackQuerySafe(bot, query.id, {
-    text: "Private development mode active.",
-    show_alert: false
-  });
-  return;
+    
     if (msg.text && msg.text.startsWith("/start")) return;
 
     const ok = await ensureSubscribedOrBlock(msg);
@@ -2464,21 +2382,7 @@ So if a token is high on Dex but lower here, that usually means the terminal thi
   );
 }
     if (data === "help_score") {
-      return sendText(chatId, `🧠 <b>Safety Score</b>\n\n
-      The safety score is a live structured judgment, not a guarantee and not financial advice.`,
-    ``,
-    `The score weighs things like:`,
-    `• liquidity health`,
-    `• age / launch maturity`,
-    `• recent buy-vs-sell flow`,
-    `• volume quality`,
-    `• holder concentration`,
-    `• honeypot / tax clues`,
-    `• contract transparency`,
-    `• adaptive memory`,
-    `• current mode`, buildHelpMenu())
-
-                     ;
+      return sendText(chatId, `🧠 <b>Safety Score</b>\n\nSafety Score blends liquidity, age, flow, transparency, holder structure, and trap risk into one defense-first read.`, buildHelpMenu());
     }
 
     if (data === "help_transactions") {
