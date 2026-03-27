@@ -14,6 +14,7 @@ function isPrivateChat(msgOrQuery) {
 // ================= ENV =================
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const HELIUS_API_KEY = process.env.HELIUS_API_KEY || "";
+const HELIUS_RPC_URL = `https://mainnet.helius-rpc.com/?api-key=${HELIUS_API_KEY}`;
 const ETHERSCAN_API_KEY = process.env.ETHERSCAN_API_KEY || "";
 const COMMUNITY_X_URL =
   process.env.COMMUNITY_X_URL || "https://x.com/gorktimusprime";
