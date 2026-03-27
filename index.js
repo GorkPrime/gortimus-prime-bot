@@ -84,7 +84,20 @@ function all(sql, params = []) {
     });
   });
 }
+// ================= CALLBACK HELPERS =================
+const callbackStore = new Map();
 
+function makeShortCallback(action, payload) {
+  const id = Math.random().toString(36).slice(2, 10);
+  callbackStore.set(id, payload);
+  return `${action}:${id}`;
+}
+
+function getShortCallbackPayload(data) {
+  const parts = String(data || "").split(":");
+  const id = parts[1] || "";
+  return callbackStore.get(id) || null;
+}
 async function initDb() {
   await run(`
     CREATE TABLE IF NOT EXISTS users (
@@ -824,21 +837,45 @@ function buildWatchlistItemMenu(pair) {
 }
 
 function buildScanActionButtons(pair, query = "") {
-  const refreshQuery = encodeURIComponent(query || pair.baseAddress || pair.baseSymbol || "");
+  const refreshQuery = encodeURIComponent(
+    String(query || pair.baseAddress || pair.baseSymbol || "").slice(0, 40)
+  );
+
+  const watchAddCb = makeShortCallback("watchadd", {
+    chainId: pair.chainId,
+    tokenAddress: pair.baseAddress
+  });
+
+  const feedbackGoodCb = makeShortCallback("feedbackgood", {
+    chainId: pair.chainId,
+    tokenAddress: pair.baseAddress
+  });
+
+  const feedbackBadCb = makeShortCallback("feedbackbad", {
+    chainId: pair.chainId,
+    tokenAddress: pair.baseAddress
+  });
+
   return {
     reply_markup: {
       inline_keyboard: [
         [
-          { text: "👁 Add Watchlist", callback_data: `watch_add:${pair.chainId}:${pair.baseAddress}` },
+          { text: "👁 Add Watchlist", callback_data: watchAddCb },
           { text: "🔎 Scan Another", callback_data: "scan_token" }
         ],
         [
-          { text: "👍 Good Call", callback_data: `feedback:good:${pair.chainId}:${pair.baseAddress}` },
-          { text: "👎 Bad Call", callback_data: `feedback:bad:${pair.chainId}:${pair.baseAddress}` }
+          { text: "👍 Good Call", callback_data: feedbackGoodCb },
+          { text: "👎 Bad Call", callback_data: feedbackBadCb }
         ],
-        [{ text: "🔄 Refresh", callback_data: `refresh_scan:${refreshQuery}` }],
-        [{ text: "🤖 Ask AI Assistant", callback_data: "ai_assistant" }],
-        [{ text: "🏠 Main Menu", callback_data: "main_menu" }]
+        [
+          { text: "🔄 Refresh", callback_data: `refresh_scan:${refreshQuery}` }
+        ],
+        [
+          { text: "🤖 Ask AI Assistant", callback_data: "ai_assistant" }
+        ],
+        [
+          { text: "🏠 Main Menu", callback_data: "main_menu" }
+        ]
       ]
     }
   };
@@ -2304,7 +2341,56 @@ bot.on("callback_query", async (query) => {
       const [, chainId, tokenAddress] = data.split(":");
       return runTokenScan(chatId, tokenAddress, userId);
     }
+if (data.startsWith("watchadd:")) {
+  const payload = getShortCallbackPayload(data);
+  if (!payload) {
+    return sendText(chatId, `Callback expired. Please rescan the token.`, buildMainMenuOnlyButton());
+  }
 
+  const pair = await resolveTokenToBestPair(payload.chainId, payload.tokenAddress);
+  if (!pair) {
+    return sendText(chatId, `Could not resolve token for watchlist.`, buildMainMenuOnlyButton("refresh:watchlist"));
+  }
+
+  await addWatchlistItem(chatId, pair);
+  return sendText(
+    chatId,
+    `👁 <b>Added to Watchlist</b>\n\n${escapeHtml(pair.baseSymbol || pair.baseAddress)}`,
+    buildMainMenuOnlyButton("refresh:watchlist")
+  );
+}
+
+if (data.startsWith("feedbackgood:")) {
+  const payload = getShortCallbackPayload(data);
+  if (!payload) {
+    return sendText(chatId, `Feedback callback expired. Please rescan the token.`, buildMainMenuOnlyButton());
+  }
+
+  const pair = await resolveTokenToBestPair(payload.chainId, payload.tokenAddress);
+  if (!pair) {
+    return sendText(chatId, `Could not resolve token for feedback save.`, buildMainMenuOnlyButton());
+  }
+
+  const verdict = await buildRiskVerdict(pair, userId);
+  await addScanFeedback(userId, pair, "good", verdict.score);
+  return sendText(chatId, `🧠 <b>Feedback Saved</b>\n\nMarked as: <b>good</b>`, buildMainMenuOnlyButton());
+}
+
+if (data.startsWith("feedbackbad:")) {
+  const payload = getShortCallbackPayload(data);
+  if (!payload) {
+    return sendText(chatId, `Feedback callback expired. Please rescan the token.`, buildMainMenuOnlyButton());
+  }
+
+  const pair = await resolveTokenToBestPair(payload.chainId, payload.tokenAddress);
+  if (!pair) {
+    return sendText(chatId, `Could not resolve token for feedback save.`, buildMainMenuOnlyButton());
+  }
+
+  const verdict = await buildRiskVerdict(pair, userId);
+  await addScanFeedback(userId, pair, "bad", verdict.score);
+  return sendText(chatId, `🧠 <b>Feedback Saved</b>\n\nMarked as: <b>bad</b>`, buildMainMenuOnlyButton());
+}
     if (data.startsWith("watch_add:")) {
       const [, chainId, tokenAddress] = data.split(":");
       const pair = await resolveTokenToBestPair(chainId, tokenAddress);
