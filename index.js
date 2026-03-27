@@ -1157,11 +1157,11 @@ return null;
       amountRaw: String(x.amount || "0"),
       uiAmount: num(x.uiAmountString ?? x.uiAmount ?? 0),
       decimals: num(x.decimals, 0)
-    }));
+       }));
   } catch (err) {
-  console.log("fetchHeliusTokenLargestAccounts error:", err?.response?.status || err.message);
-  return [];
-}
+    console.log("fetchHeliusTokenLargestAccounts error:", err?.response?.status || err.message);
+    return [];
+  }
 }
 
 async function fetchEvmHoneypot(address, chainId) {
