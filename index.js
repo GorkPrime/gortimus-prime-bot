@@ -108,9 +108,9 @@ function all(sql, params = []) {
 }
 async function askAI(text) {
   try {
-    const res = await openai.responses.create({
-      model: "gpt-4.1-mini",
-      input: [
+    const res = await openai.chat.completions.create({
+      model: "gpt-4-mini",
+      messages: [
         {
           role: "system",
           content: `
@@ -146,7 +146,7 @@ Never speak like generic AI.
       ]
     });
 
-    return `⚡ <b>GORKTIMUS VERDICT</b>\n\n${res.output_text}`;
+    return `⚡ <b>GORKTIMUS VERDICT</b>\n\n${res.choices[0].message.content}`;
 
   } catch (err) {
     console.log("AI ERROR:", err?.message);
