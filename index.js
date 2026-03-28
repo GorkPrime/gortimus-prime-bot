@@ -2028,15 +2028,6 @@ async function showLaunchRadar(chatId) {
   });
 }
 
-async function resolveTokenToBestPair(chainId, tokenAddress) {
-  try {
-    const pairs = await fetchPairsByToken(chainId, tokenAddress);
-    if (!pairs.length) return null;
-    return pairs.sort((a, b) => rankPairQuality(b) - rankPairQuality(a))[0];
-  } catch {
-    return null;
-  }
-}
 
 async function showPrimePicks(chatId) {
   const profiles = await fetchLatestProfiles();
