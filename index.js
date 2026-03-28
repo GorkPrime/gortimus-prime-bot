@@ -2103,15 +2103,7 @@ async function showEdgeBrain(chatId) {
   );
 }
 
-async function showAIAssistant(chatId) {
-  pendingAction.set(chatId, { type: "AI" });
 
-  await sendText(
-    chatId,
-    "🤖 <b>AI mode ON.</b>\n\nSend me a message.",
-    buildAIAssistantMenu()
-  );
-}
 
 async function showWalletList(chatId, type) {
   const rows = await all(
@@ -2212,7 +2204,7 @@ bot.on("message", async (msg) => {
     if (!msg?.from?.id || !msg?.chat?.id) return;
     
     if (msg.text && msg.text.startsWith("/start")) return;
-OrBlock(msg);
+
     await upsertUserFromMessage(msg, ok ? 1 : 0);
     await ensureUserSettings(msg.from.id);
     await trackUserActivity(msg.from.id);
