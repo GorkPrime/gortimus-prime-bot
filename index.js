@@ -764,6 +764,11 @@ async function ensureSubscribedOrBlock(msgOrQuery) {
 }
 
 // ================= MENUS =================
+function getDevModeStatus() {
+  const isDev = process.env.NODE_ENV === 'development';
+  return isDev ? `🔴 DEV: ON` : `🟢 PROD: ON`;
+}
+
 function buildMainMenu() {
   const growthRow = BOT_USERNAME
     ? [{ text: "🚀 Invite Friends", callback_data: "invite_friends" }]
@@ -1874,9 +1879,7 @@ async function showMainMenu(chatId) {
   const pulse = await getNetworkPulse();
   await sendMenu(
     chatId,
-    `🧠 <b>Gorktimus Intelligence Terminal</b>\n\n${pulse}\n\nLive intelligence. On-demand execution.\nNo clutter. No spam.\n\nSelect an operation below.`,
-    buildMainMenu()
-  );
+   `🧠 <b>Gorktimus Intelligence Terminal</b> ${getDevModeStatus()}\n\n${pulse}\n\nLive intelligence. On-demand execution.\nNo clutter. No spam.\n\nSelect an operation below.`,
 }
 
 async function showHelpMenu(chatId) {
