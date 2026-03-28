@@ -1033,7 +1033,7 @@ async function fetchPairsByToken(chainId, tokenAddress) {
   const pairs = Array.isArray(data) ? data : [];
   return pairs.map(normalizePair).filter((p) => p && supportsChain(p.chainId));
 }
- 
+async function resolveBestPair(query, forceFresh = true) { 
 async function resolveBestPair(query) {
   const q = String(query || "").trim();
   if (!q) return null;
@@ -1042,32 +1042,27 @@ async function resolveBestPair(query) {
   const now = Date.now();
   const cached = pairCache.get(cacheKey);
 
-  if (cached && now - cached.ts < 5000) {
-    return cached.data;
+async function resolveTokenToBestPair(chainId, tokenAddress, forceFresh = false) {
+  try {
+    const cacheKey = `${String(chainId).toLowerCase()}:${String(tokenAddress).toLowerCase()}`;
+    const now = Date.now();
+    const cached = pairCache.get(cacheKey);
+
+    if (!forceFresh && cached && now - cached.ts < 5000) {
+      return cached.data;
+    }
+
+    const pairs = await fetchPairsByToken(chainId, tokenAddress);
+    if (!pairs.length) return null;
+
+    const best = pairs.sort((a, b) => rankPairQuality(b) - rankPairQuality(a))[0];
+    pairCache.set(cacheKey, { ts: Date.now(), data: best });
+    return best;
+  } catch (err) {
+    console.log("resolveTokenToBestPair error:", err.message);
+    return null;
   }
-
-  let result = null;
-  let tries = 0;
-
-  while (tries < 3) {
-    try {
-      if (isAddressLike(q)) {
-        const chainCandidates = q.startsWith("0x") ? ["base", "ethereum"] : ["solana"];
-        const byTokenResults = [];
-
-        for (const chainId of chainCandidates) {
-          try {
-            const pairs = await fetchPairsByToken(chainId, q);
-            byTokenResults.push(...pairs);
-            await sleep(250);
-          } catch (_) {}
-        }
-
-        if (byTokenResults.length) {
-          result = byTokenResults.sort((a, b) => rankPairQuality(b) - rankPairQuality(a))[0];
-          break;
-        }
-      }
+}
 
       const pairs = await searchDexPairs(q);
       if (!pairs.length) {
@@ -1837,7 +1832,7 @@ async function promptScanToken(chatId) {
 }
 
 async function runTokenScan(chatId, query, userId = null) {
-  const pair = await resolveBestPair(query);
+  const pair = await resolveBestPair(query,false);
 
   if (userId) {
     await setUserSetting(userId, "last_scan_query", String(query || ""));
