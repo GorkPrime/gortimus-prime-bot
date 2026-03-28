@@ -277,9 +277,12 @@ async function initDb() {
 // ================= BASIC HELPERS =================
 async function fetchHeliusTokenLargestAccounts(mint) {
   const now = Date.now();
+  async function fetchHeliusTokenLargestAccounts(mint) {
+  const now = Date.now();
   const cached = largestAccountsCache.get(mint);
 
   if (cached && (now - cached.ts < LARGEST_ACCOUNTS_TTL_MS)) {
+    console.log(`Cache hit for ${mint} - ${Math.round((LARGEST_ACCOUNTS_TTL_MS - (now - cached.ts)) / 1000)}s remaining`);
     return cached.data;
   }
 
