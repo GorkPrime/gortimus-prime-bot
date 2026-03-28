@@ -112,7 +112,7 @@ function all(sql, params = []) {
 async function askAI(text) {
   try {
     const res = await openai.chat.completions.create({
-      model: "gpt-40",
+      model: "gpt-5.1",
       messages: [
         {
           role: "system",
