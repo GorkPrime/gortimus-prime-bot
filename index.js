@@ -2104,7 +2104,13 @@ async function showEdgeBrain(chatId) {
 }
 
 async function showAIAssistant(chatId) {
-  await sendText(chatId, buildAssistantGenericReply(), buildAIAssistantMenu());
+  pendingAction.set(chatId, { type: "AI" });
+
+  await sendText(
+    chatId,
+    "🤖 <b>AI mode ON.</b>\n\nSend me a message.",
+    buildAIAssistantMenu()
+  );
 }
 
 async function showWalletList(chatId, type) {
@@ -2322,23 +2328,12 @@ if (data.startsWith("watch_rescan:")) {
     if (data === "mode_lab") return showModeLab(chatId, userId);
     if (data === "alert_center") return showAlertCenter(chatId, userId);
     if (data === "edge_brain") return showEdgeBrain(chatId);
-    if (data === "ai_assistant") {
-  pendingAction.set(chatId, { type: "AI" });
-  return sendText(
-    chatId,
-    "🤖 <b>AI mode ON.</b>\n\nSend me a message.",
-    buildAIAssistantMenu()
-  );
-}
+   if (data === "ai_assistant") return showAIAssistant(chatId);
     if (data === "help_menu") return showHelpMenu(chatId);
     if (data === "whale_menu") return showWhaleMenu(chatId);
     if (data === "invite_friends") return showInviteFriends(chatId);
     if (data === "check_subscription") return showMainMenu(chatId);
-pendingAction.set(chatId, { type: "AI" });
 
-await sendText(chatId, "AI mode ON. Send a message.", buildAIAssistantMenu());
-
-return;
    if (data === "help_engine") {
   return sendText(
     chatId,
