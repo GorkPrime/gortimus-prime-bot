@@ -2269,11 +2269,11 @@ if (mode?.type === "AI") {
       return;
     }
 
-    if (pending?.type === "AI_PROMPT") {
-      pendingAction.delete(chatId);
-      await sendText(chatId, buildAssistantGenericReply(cleaned), buildAIAssistantMenu());
-      return;
-    }
+   if (pending?.type === "AI") {
+  const reply = await askAI(cleaned);
+  await sendText(chatId, `🤖 <b>Gorktimus AI Assistant</b>\n\n${escapeHtml(reply)}`, buildAIAssistantMenu());
+  return;
+}
 
     if (isAddressLike(cleaned)) {
       await runTokenScan(chatId, cleaned, msg.from.id);
@@ -2322,7 +2322,14 @@ if (data.startsWith("watch_rescan:")) {
     if (data === "mode_lab") return showModeLab(chatId, userId);
     if (data === "alert_center") return showAlertCenter(chatId, userId);
     if (data === "edge_brain") return showEdgeBrain(chatId);
-    if (data === "ai_assistant") return showAIAssistant(chatId);
+    if (data === "ai_assistant") {
+  pendingAction.set(chatId, { type: "AI" });
+  return sendText(
+    chatId,
+    "🤖 <b>AI mode ON.</b>\n\nSend me a message.",
+    buildAIAssistantMenu()
+  );
+}
     if (data === "help_menu") return showHelpMenu(chatId);
     if (data === "whale_menu") return showWhaleMenu(chatId);
     if (data === "invite_friends") return showInviteFriends(chatId);
