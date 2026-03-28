@@ -2235,7 +2235,6 @@ bot.onText(/\/start/, async (msg) => {
     console.log("/start error:", err.message);
   }
 });
-});
 
 // ================= MESSAGE HANDLER =================
 async function showAIAssistant(chatId) {
