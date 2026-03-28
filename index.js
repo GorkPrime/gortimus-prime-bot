@@ -2240,25 +2240,7 @@ async function showAIAssistant(chatId) {
     buildAIAssistantMenu()
   );
 }
-if (pending?.type === "AI") {
-  const isToken = cleaned.length > 30 && !cleaned.includes(" ");
 
-  if (isToken) {
-    await runTokenScan(chatId, cleaned, msg.from.id);
-    return;
-  }
-
-  const reply = await askAI(cleaned);
-
-  await sendText(
-    chatId,
-    `🤖 <b>Gorktimus AI Assistant</b>\n\n${escapeHtml(reply)}`,
-    buildAIAssistantMenu()
-  );
-
-  return;
-
-}
 bot.on("message", async (msg) => {
   try {
     if (!isPrivateChat(msg)) return;
