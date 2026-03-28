@@ -275,8 +275,7 @@ async function initDb() {
 }
 
 // ================= BASIC HELPERS =================
-async function fetchHeliusTokenLargestAccounts(mint) {
-  const now = Date.now();
+
   async function fetchHeliusTokenLargestAccounts(mint) {
   const now = Date.now();
   const cached = largestAccountsCache.get(mint);
