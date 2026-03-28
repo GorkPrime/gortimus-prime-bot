@@ -2345,9 +2345,9 @@ bot.on("callback_query", async (query) => {
   const data = String(query?.data || "");
 
   if (!isPrivateChat(query)) {
-  await answerCallbackSafe(query.id);
-  return;
-}
+    await answerCallbackSafe(query.id);
+    return;
+  }
 
   try {
     const ok = await ensureSubscribedOrBlock(query);
@@ -2355,11 +2355,7 @@ bot.on("callback_query", async (query) => {
       await answerCallbackSafe(query.id);
       return;
     }
-if (data.startsWith("watch_rescan:")) {
-  const parts = data.split(":");
-  const tokenAddress = parts[2];
-
-  return await runTokenScan(chatId, tokenAddress, userId);
+    await runTokenScan(chatId, tokenAddress, userId);
 }
     await answerCallbackSafe(query.id);
 
