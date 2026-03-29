@@ -999,6 +999,66 @@ function buildMainMenuOnlyButton(refreshCallback = "refresh:main") {
     }
   };
 }
+function buildMiniSignalCard(pair, index, mode = "standard") {
+  const dexUrl = makeDexUrl(pair.chainId, pair.pairAddress, pair.url);
+  const symbol = escapeHtml(pair.baseSymbol || "N/A");
+  const chain = escapeHtml(humanChain(pair.chainId));
+  const address = escapeHtml(pair.baseAddress || "");
+  const age = ageFromMs(pair.pairCreatedAt);
+
+  let verdict = "Structure is being watched.";
+  if (mode === "trending") {
+    verdict =
+      pair.buysM5 > pair.sellsM5
+        ? "Momentum is active. Buyers are leading short-term flow."
+        : "Attention is live, but buyer control is not fully established.";
+  } else if (mode === "launch") {
+    verdict =
+      pair.volumeH24 >= pair.liquidityUsd * 1.5
+        ? "Strong early flow relative to liquidity."
+        : "Fresh activity detected, but confirmation is still forming.";
+  } else if (mode === "prime") {
+    verdict =
+      pair.liquidityUsd >= PRIME_MIN_LIQ_USD * 2
+        ? "Cleaner structure with stronger balance."
+        : "Qualified setup, but not top-tier depth yet.";
+  }
+
+  return [
+    `━━━━━━━━━━━━━━━`,
+    `<b>${index}. <a href="${dexUrl}">${symbol}</a></b> • ${chain}`,
+    `<code>${shortAddr(address, 6)}</code>`,
+    `Price: <b>${shortUsd(pair.priceUsd)}</b>   Mcap: <b>${shortUsd(pair.marketCap)}</b>`,
+    `Liq: <b>${shortUsd(pair.liquidityUsd)}</b>   Vol: <b>${shortUsd(pair.volumeH24)}</b>`,
+    `Flow: <b>${pair.buysM5}B / ${pair.sellsM5}S</b>   Age: <b>${age}</b>`,
+    `<i>${escapeHtml(verdict)}</i>`
+  ].join("\n");
+}
+function buildSignalListButtons(items, refreshKey) {
+  const rows = [];
+
+  for (const pair of items) {
+    const dexUrl = makeDexUrl(pair.chainId, pair.pairAddress, pair.url);
+
+    rows.push([
+      { text: `📈 ${clip(pair.baseSymbol || "Token", 18)}`, url: dexUrl },
+      { text: "📋 Copy Address", copy_text: { text: pair.baseAddress || "" } }
+    ]);
+
+    rows.push([
+      { text: "🔎 Full Scan", callback_data: `scan_direct:${pair.chainId}:${pair.baseAddress}` }
+    ]);
+  }
+
+  rows.push([{ text: "🔄 Refresh", callback_data: refreshKey }]);
+  rows.push([{ text: "🏠 Main Menu", callback_data: "main_menu" }]);
+
+  return {
+    reply_markup: {
+      inline_keyboard: rows
+    }
+  };
+}
 
 function buildWalletListMenu(rows, type) {
   const buttons = rows.map((row) => [
@@ -2153,37 +2213,44 @@ async function showTrending(chatId, userId = null) {
     return;
   }
 
+  const pairs = [];
+
+  for (const item of top) {
+    const chainId = String(item.chainId || "").toLowerCase();
+    const tokenAddress = String(item.tokenAddress || "");
+    if (!tokenAddress) continue;
+
+    const pair = await resolveTokenToBestPair(chainId, tokenAddress, true);
+    if (!pair) continue;
+
+    pairs.push(pair);
+  }
+
+  if (!pairs.length) {
+    await sendText(
+      chatId,
+      `🧠 <b>Trending</b>\n\nNo live trending pairs could be resolved right now.`,
+      buildMainMenuOnlyButton("refresh:trending")
+    );
+    return;
+  }
+
   const lines = [
     `🧠 <b>Trending</b>`,
     ``,
-    `This list is not meant to match Dex line-for-line. It is a quick live discovery layer. A Live momentum board ranked by current attention, chain activity, and surface strength — not just hype alone.`
+    `This list is not meant to match Dex line-for-line. It is a quick live discovery layer. A Live momentum board ranked by current attention, chain activity, and surface strength — not just hype alone.`,
+    ``
   ];
 
-  const buttons = [];
-  for (const [index, item] of top.entries()) {
-  const chainId = String(item.chainId || "").toLowerCase();
-  const tokenAddress = String(item.tokenAddress || "");
-  const amount = num(item.amount);
-
-  lines.push(
-    `#${index + 1} <b>${escapeHtml(item.tokenAddress ? shortAddr(tokenAddress, 6) : "Candidate")}</b> • ${escapeHtml(humanChain(chainId))}\n` +
-    `Boost: ${amount}\n` +
-    `${amount >= 500 ? `Heavy attention signal detected.` : `Moderate attention signal — momentum needs validation.`}\n`
-  );
-    if (tokenAddress) {
-      buttons.push([{
-        text: `🔎 Scan ${clip(shortAddr(tokenAddress, 6), 22)}`,
-        callback_data: `scan_direct:${chainId}:${tokenAddress}`
-      }]);
-    }
+  for (const [index, pair] of pairs.entries()) {
+    lines.push(buildMiniSignalCard(pair, index + 1));
   }
 
-  buttons.push([{ text: "🔄 Refresh", callback_data: "refresh:trending" }]);
-  buttons.push([{ text: "🏠 Main Menu", callback_data: "main_menu" }]);
-
-  await sendText(chatId, lines.join("\n"), {
-    reply_markup: { inline_keyboard: buttons }
-  });
+  await sendText(
+    chatId,
+    lines.join("\n\n"),
+    buildSignalListButtons(pairs, "refresh:trending")
+  );
 }
 
 async function showLaunchRadar(chatId) {
@@ -2192,12 +2259,18 @@ async function showLaunchRadar(chatId) {
 
   for (const p of profiles.slice(0, 25)) {
     if (!supportsChain(p.chainId)) continue;
-   const pair = await resolveTokenToBestPair(p.chainId, p.tokenAddress, true);
+    const pair = await resolveTokenToBestPair(p.chainId, p.tokenAddress, true);
     if (!pair) continue;
+
     const ageMin = ageMinutesFromMs(pair.pairCreatedAt);
-    if (pair.liquidityUsd >= LAUNCH_MIN_LIQ_USD && pair.volumeH24 >= LAUNCH_MIN_VOL_USD && ageMin <= 1440) {
+    if (
+      pair.liquidityUsd >= LAUNCH_MIN_LIQ_USD &&
+      pair.volumeH24 >= LAUNCH_MIN_VOL_USD &&
+      ageMin <= 1440
+    ) {
       candidates.push(pair);
     }
+
     if (candidates.length >= 3) break;
   }
 
@@ -2213,30 +2286,20 @@ async function showLaunchRadar(chatId) {
   const lines = [
     `🧠 <b>Launch Radar</b>`,
     ``,
-    `These are more than just newly realeased tokens. These are the earliest live opportunities with enough liquidity, movement, and structure to deserve attention. `
+    `These are more than just newly realeased tokens. These are the earliest live opportunities with enough liquidity, movement, and structure to deserve attention.`,
+    ``
   ];
 
-  const buttons = [];
- for (const [index, pair] of candidates.entries()) {
-  lines.push(
-    `#${index + 1} <b>${escapeHtml(pair.baseSymbol || "N/A")}</b> • ${escapeHtml(humanChain(pair.chainId))}\n` +
-    `Liq: ${shortUsd(pair.liquidityUsd)} | Vol: ${shortUsd(pair.volumeH24)} | Age: ${ageFromMs(pair.pairCreatedAt)}\n` +
-    `${pair.volumeH24 >= (pair.liquidityUsd * 1.5) ? `Strong early flow relative to liquidity.` : `Early activity detected, but still needs confirmation.`}\n`
-  );
-    buttons.push([{
-      text: `🔎 Scan ${clip(pair.baseSymbol || shortAddr(pair.baseAddress, 6), 22)}`,
-      callback_data: `scan_direct:${pair.chainId}:${pair.baseAddress}`
-    }]);
+  for (const [index, pair] of candidates.entries()) {
+    lines.push(buildMiniSignalCard(pair, index + 1));
   }
 
-  buttons.push([{ text: "🔄 Refresh", callback_data: "refresh:launch_radar" }]);
-  buttons.push([{ text: "🏠 Main Menu", callback_data: "main_menu" }]);
-
-  await sendText(chatId, lines.join("\n"), {
-    reply_markup: { inline_keyboard: buttons }
-  });
+  await sendText(
+    chatId,
+    lines.join("\n\n"),
+    buildSignalListButtons(candidates, "refresh:launch_radar")
+  );
 }
-
 
 async function showPrimePicks(chatId) {
   const profiles = await fetchLatestProfiles();
@@ -2246,6 +2309,7 @@ async function showPrimePicks(chatId) {
     if (!supportsChain(p.chainId)) continue;
     const pair = await resolveTokenToBestPair(p.chainId, p.tokenAddress);
     if (!pair) continue;
+
     const ageMin = ageMinutesFromMs(pair.pairCreatedAt);
     if (
       pair.liquidityUsd >= PRIME_MIN_LIQ_USD &&
@@ -2254,6 +2318,7 @@ async function showPrimePicks(chatId) {
     ) {
       picks.push(pair);
     }
+
     if (picks.length >= 5) break;
   }
 
@@ -2269,28 +2334,19 @@ async function showPrimePicks(chatId) {
   const lines = [
     `🧠 <b>Prime Picks</b>`,
     ``,
-    `Highest-conviction live setups ranked by stronger liquidity, volume support, and overall structural quality. Thank Us Later`
+    `Prime Picks are meant to surface stronger-looking opportunities that have better overall structure than average runners. They are not guaranteed winners, but they pass a higher quality bar.`,
+    ``
   ];
 
-  const buttons = [];
-for (const [index, pair] of picks.entries()) {
-  lines.push(
-    `#${index + 1} <b>${escapeHtml(pair.baseSymbol || "N/A")}</b> • ${escapeHtml(humanChain(pair.chainId))}\n` +
-    `Liq: ${shortUsd(pair.liquidityUsd)} | Vol: ${shortUsd(pair.volumeH24)} | Age: ${ageFromMs(pair.pairCreatedAt)}\n` +
-    `${pair.liquidityUsd >= PRIME_MIN_LIQ_USD * 2 ? `Deeper structure than average current candidates.` : `Qualified setup, but not top-tier depth yet.`}\n`
-  );
-    buttons.push([{
-      text: `🔎 Scan ${clip(pair.baseSymbol || shortAddr(pair.baseAddress, 6), 22)}`,
-      callback_data: `scan_direct:${pair.chainId}:${pair.baseAddress}`
-    }]);
+  for (const [index, pair] of picks.entries()) {
+    lines.push(buildMiniSignalCard(pair, index + 1));
   }
 
-  buttons.push([{ text: "🔄 Refresh", callback_data: "refresh:prime_picks" }]);
-  buttons.push([{ text: "🏠 Main Menu", callback_data: "main_menu" }]);
-
-  await sendText(chatId, lines.join("\n"), {
-    reply_markup: { inline_keyboard: buttons }
-  });
+  await sendText(
+    chatId,
+    lines.join("\n\n"),
+    buildSignalListButtons(picks, "refresh:prime_picks")
+  );
 }
 
 async function showWatchlist(chatId) {
