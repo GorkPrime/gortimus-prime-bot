@@ -42,8 +42,8 @@ if (!BOT_TOKEN) {
 }
 
 // ================= CONFIG =================
-const DEX_TIMEOUT_MS = 15000;
-const HELIUS_TIMEOUT_MS = 20000;
+const DEX_TIMEOUT_MS = 6000;
+const HELIUS_TIMEOUT_MS = 7000;
 const TELEGRAM_SEND_RETRY_MS = 900;
 const MAX_WATCHLIST_ITEMS = 30;
 const PRIME_MIN_LIQ_USD = 30000;
@@ -1120,16 +1120,17 @@ async function resolveBestPair(query, forceFresh = false) {
         const chainCandidates = q.startsWith("0x")
           ? ["base", "ethereum"]
           : ["solana"];
+const tokenResults = await Promise.all(
+  chainCandidates.map(async (chainId) => {
+    try {
+      return await fetchPairsByToken(chainId, q);
+    } catch (_) {
+      return [];
+    }
+  })
+);
 
-        const byTokenResults = [];
-
-        for (const chainId of chainCandidates) {
-          try {
-            const pairs = await fetchPairsByToken(chainId, q);
-            byTokenResults.push(...pairs);
-            await sleep(250);
-          } catch (_) {}
-        }
+const byTokenResults = tokenResults.flat();
 
         if (byTokenResults.length) {
           result = byTokenResults.sort((a, b) => rankPairQuality(b) - rankPairQuality(a))[0];
@@ -1158,7 +1159,7 @@ async function resolveBestPair(query, forceFresh = false) {
       if (status === 429) {
         tries += 1;
         console.log(`resolveBestPair 429 for ${q}. Retry ${tries}/3`);
-        await sleep(1500 * tries);
+        await sleep(400 * tries);
         continue;
       }
 
