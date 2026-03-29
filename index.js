@@ -1167,7 +1167,7 @@ async function resolveBestPair(query, forceFresh = false) {
   const now = Date.now();
   const cached = pairCache.get(cacheKey);
 
-  if (!forceFresh && cached && now - cached.ts < 20000 ) {
+  if (!forceFresh && cached && now - cached.ts < 40000 ) {
     return cached.data;
   }
 
@@ -1238,7 +1238,7 @@ async function resolveTokenToBestPair(chainId, tokenAddress, forceFresh = false)
     const now = Date.now();
     const cached = pairCache.get(cacheKey);
 
-    if (!forceFresh && cached && now - cached.ts < 5000) {
+    if (!forceFresh && cached && now - cached.ts < 10000) {
       return cached.data;
     }
 
@@ -2176,7 +2176,13 @@ function detectInputType(text) {
   };
 }
 async function runTokenScan(chatId, query, userId = null) {
-  const pair = await resolveBestPair(query,false);
+  await sendText(
+    chatId,
+    `🧠 <b>Gorktimus Intelligence Terminal</b>\n\n🔎 <b>Scanning</b>\n\nPulling live structure and risk data for <b>${escapeHtml(query)}</b>...`,
+    buildMainMenuOnlyButton("scan_token")
+  );
+
+  const pair = await resolveBestPair(query, false);
 
   if (userId) {
     await setUserSetting(userId, "last_scan_query", String(query || ""));
@@ -2192,10 +2198,13 @@ async function runTokenScan(chatId, query, userId = null) {
     return;
   }
 
-  await savePairMemorySnapshot(pair);
-  const imageUrl = await fetchTokenProfileImage(pair.chainId, pair.baseAddress, pair);
-  const card = await buildScanCard(pair, "🔎 <b>Token Scan</b>", userId);
-  await sendCard(chatId, card, buildScanActionButtons(pair, query), imageUrl);
+  const snapshotPromise = savePairMemorySnapshot(pair).catch(() => {});
+  const cardPromise = buildScanCard(pair, "🔎 <b>Token Scan</b>", userId);
+
+  const card = await cardPromise;
+  snapshotPromise.catch(() => {});
+
+  await sendCard(chatId, card, buildScanActionButtons(pair, query), "");
 }
 
 async function showTrending(chatId, userId = null) {
