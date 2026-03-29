@@ -2485,10 +2485,13 @@ async function handleRefresh(chatId, userId, key) {
 }
 
 // ================= COMMANDS =================
-if (DEV_MODE && String(msg.from?.id) !== OWNER_USER_ID) {
-  await sendText(msg.chat.id, "🚫 This bot is in development mode. Access denied.");
-  return;
-}
+// ================= COMMANDS =================
+bot.onText(/\/start/, async (msg) => {
+  try {
+    if (DEV_MODE && String(msg.from?.id) !== OWNER_USER_ID) {
+      await sendText(msg.chat.id, "🚫 Development mode. Access denied.");
+      return;
+    }
 
     const ok = await ensureSubscribedOrBlock(msg);
     await upsertUserFromMessage(msg, ok ? 1 : 0);
