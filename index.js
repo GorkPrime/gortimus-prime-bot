@@ -1,6 +1,6 @@
 const TelegramBot = require("node-telegram-bot-api");
 const axios = require("axios");
-
+const DEV_MODE = false;
 const OpenAI = require("openai");
 
 const openai = new OpenAI({
@@ -2485,7 +2485,10 @@ async function handleRefresh(chatId, userId, key) {
 }
 
 // ================= COMMANDS =================
-
+if (DEV_MODE && String(msg.from?.id) !== OWNER_USER_ID) {
+  await sendText(msg.chat.id, "🚫 This bot is in development mode. Access denied.");
+  return;
+}
 
     const ok = await ensureSubscribedOrBlock(msg);
     await upsertUserFromMessage(msg, ok ? 1 : 0);
