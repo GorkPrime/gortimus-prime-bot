@@ -2309,10 +2309,7 @@ async function showModeLab(chatId, userId) {
   const settings = await getUserSettings(userId);
   await sendText(
     chatId,
-    `🧠 <b>Mode Lab</b>\n\nCurrent mode: <b>${escapeHtml(modeTitle(settings.mode))}</b>\n\nAggressive =earlier entries, more tolerance for fresh or hotter setups and slightly more permissive\
-    
-    nBalanced = strongest default for most users aka middle ground\
-    nGuardian = stricter defense better if you want cleaner structure and less tolerance for weak liquidity or concentration risk`,
+    `🧠 <b>Mode Lab</b>\n\nCurrent mode: <b>${escapeHtml(modeTitle(settings.mode))}</b>\n\nAggressive = Earlier entries, more tolerance for fresh or hotter setups and slightly more permissive\nBalanced = Strongest default for most users or in other words middle ground\nGuardian = Stricter defense better if you want cleaner structure and less tolerance for weak liquidity or concentration risk`,
     buildModeMenu(settings.mode)
   );
 }
