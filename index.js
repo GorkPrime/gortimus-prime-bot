@@ -295,7 +295,13 @@ async function initDb() {
   } catch (_) {}
 }
   try {
+  async function runMigrations() {
+  try {
     await run(`ALTER TABLE users ADD COLUMN plan_tier TEXT DEFAULT 'free'`);
+  } catch (e) {
+    console.log("plan_tier may already exist");
+  }
+}
   } catch (_) {}
 
   try {
@@ -2862,7 +2868,7 @@ bot.on("message", async (msg) => {
     if (!isPrivateChat(msg)) return;
     if (!msg?.from?.id || !msg?.chat?.id) return;
     if (msg.text && msg.text.startsWith("/start")) return;
-
+runMigrations();
     const ok = await ensureSubscribedOrBlock(msg);
     await upsertUserFromMessage(msg, ok ? 1 : 0);
     await ensureUserSettings(msg.from.id);
