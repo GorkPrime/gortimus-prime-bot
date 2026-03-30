@@ -89,6 +89,10 @@ const callbackStore = new Map();
 
 // ================= DEV MODE LOCK =================
 const OWNER_USER_ID = process.env.OWNER_USER_ID || "";
+function isOwnerUser(userId) {
+  return String(userId) === String(OWNER_USER_ID);
+}
+
 // ================= DB HELPERS =================
 function makeShortCallback(action, payload) {
   const id = Math.random().toString(36).slice(2, 10);
@@ -964,7 +968,9 @@ async function requirePremiumAccess(chatId, userId) {
     {
       reply_markup: {
         inline_keyboard: [
-          [{ text: "🎟 Founding Access", callback_data: "founding_info" }],
+        ...(isOwnerUser(userId)
+  ? [{ text: "🎟 Founding Access", callback_data: "founding_info" }]
+  : [])
           [{ text: "🏠 Main Menu", callback_data: "main_menu" }]
         ]
       }
@@ -1009,7 +1015,7 @@ async function showMyPlan(chatId, userId) {
     }
   );
 }
-async function showFoundingInfo(chatId) {
+async function showFoundingInfo(chatId,userid) {
   await sendText(
     chatId,
     `💠 <b>Founding Access</b>\n\n` +
@@ -1027,14 +1033,16 @@ async function showFoundingInfo(chatId) {
     }
   );
 }
-
+if (!isOwnerUser(userId)) {
+  return sendText(chatId, "🚫 Not available.");
+}
 // ================= MENUS =================
 function getDevModeStatus() {
   const isDev = process.env.NODE_ENV === 'development';
   return isDev ? `🔴 DEV: ON` : `🟢 PROD: ON`;
 }
 
-function buildMainMenu() {
+function buildMainMenu(userid) {
   const growthRow = BOT_USERNAME
     ? [{ text: "🚀 Invite Friends", callback_data: "invite_friends" }]
     : [];
@@ -2206,12 +2214,12 @@ function buildAssistantGenericReply(prompt = "") {
 }
 
 // ================= SCREENS =================
-async function showMainMenu(chatId) {
+async function showMainMenu(chatId,userid) {
   const pulse = await getNetworkPulse();
   await sendMenu(
     chatId,
     `🧠 <b>Gorktimus Intelligence Terminal</b> ${getDevModeStatus()}\n\n${pulse}\n\nLive intelligence. On-demand execution.\nNo clutter. No spam.\n\nSelect an operation below.`,
-    buildMainMenu()
+    buildMainMenu(userid)
   );
 }
 
@@ -2739,7 +2747,7 @@ async function handleWatchOpen(chatId, userId, chainId, tokenAddress) {
 }
 
 async function handleRefresh(chatId, userId, key) {
-  if (key === "main") return showMainMenu(chatId);
+  if (key === "main") return showMainMenu(chatId, userid);
   if (key === "help") return showHelpMenu(chatId);
   if (key === "trending") return showTrending(chatId, userId);
   if (key === "launch_radar") return showLaunchRadar(chatId);
@@ -2767,7 +2775,7 @@ bot.onText(/\/start/, async (msg) => {
     await ensureUserSettings(msg.from.id);
     await trackUserActivity(msg.from.id);
     if (!ok) return;
-    await showMainMenu(msg.chat.id);
+    await showMainMenu(msg.chat.id, msg.from.id);
   } catch (err) {
     console.log("/start error:", err.message);
   }
@@ -2971,7 +2979,7 @@ bot.on("callback_query", async (query) => {
     if (data === "prime_picks") return showPrimePicks(chatId);
     if (data === "watchlist") return showWatchlist(chatId);
     if (data === "my_plan") return showMyPlan(chatId, userId);
-    if (data === "founding_info") return showFoundingInfo(chatId);
+    if (data === "founding_info") return showFoundingInfo(chatId,userid);
     if (data === "mode_lab") return showModeLab(chatId, userId);
     if (data === "alert_center") return showAlertCenter(chatId, userId);
     if (data === "edge_brain") return showEdgeBrain(chatId);
