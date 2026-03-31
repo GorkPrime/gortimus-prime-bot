@@ -1206,8 +1206,8 @@ const byTokenResults = tokenResults.flat();
 
       const lowered = q.toLowerCase();
       result = pairs.sort((a, b) => {
-        const exactA = String(a.baseSymbol || "").toLowerCase() === lowered;
-        const exactB = String(a.baseSymbol || "").toLowerCase() === lowered;
+       const exactA = String(a.baseSymbol || "").toLowerCase() === lowered;
+const exactB = String(b.baseSymbol || "").toLowerCase() === lowered;
         if (exactA !== exactB) return exactB - exactA;
         return rankPairQuality(b) - rankPairQuality(a);
       })[0];
