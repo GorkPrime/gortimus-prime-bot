@@ -1,6 +1,12 @@
+
 const TelegramBot = require("node-telegram-bot-api");
 const axios = require("axios");
-const DEV_MODE = process.env.DEV_MODE === "true" && !!process.env.OWNER_USER_ID;
+
+// Define isDevMode function FIRST
+const isDevMode = () => process.env.DEV_MODE === "true" && !!process.env.OWNER_USER_ID;
+
+const OpenAI = require("openai");
+
 const OpenAI = require("openai");
 
 const openai = new OpenAI({
