@@ -1158,7 +1158,7 @@ function rankPairQuality(pair) {
 function normalizePair(pair) {
   if (!pair) return null;
   return {
-    chainId: String(pair.chainId || ""),
+   chainId: String(pair.chainId || pair.chain || "solana").toLowerCase(),
     dexId: String(pair.dexId || ""),
     pairAddress: String(pair.pairAddress || ""),
     pairCreatedAt: num(pair.pairCreatedAt || 0),
@@ -1209,11 +1209,24 @@ async function searchDexPairs(query) {
 }
 
 async function fetchPairsByToken(chainId, tokenAddress) {
-  const data = await safeGet(
-    `https://api.dexscreener.com/token-pairs/v1/${encodeURIComponent(chainId)}/${encodeURIComponent(tokenAddress)}`
-  );
-  const pairs = Array.isArray(data) ? data : [];
-  return pairs.map(normalizePair).filter((p) => p && supportsChain(p.chainId));
+  try {
+    const data = await safeGet(
+      `https://api.dexscreener.com/token-pairs/v1/${encodeURIComponent(chainId)}/${encodeURIComponent(tokenAddress)}`
+    );
+    
+    // DexScreener returns { pairs: [...] } structure
+    const pairs = Array.isArray(data) ? data : (Array.isArray(data?.pairs) ? data.pairs : []);
+    
+    if (!pairs.length) return [];
+    
+    // Filter for supported chains and ensure proper fields
+    return pairs
+      .map(normalizePair)
+      .filter((p) => p && supportsChain(p.chainId) && p.baseAddress && p.pairAddress);
+  } catch (err) {
+    console.log(`fetchPairsByToken error for ${chainId}:${tokenAddress}`, err.message);
+    return [];
+  }
 }
 async function resolveBestPair(query, forceFresh = false) {
   const q = String(query || "").trim();
@@ -1223,7 +1236,7 @@ async function resolveBestPair(query, forceFresh = false) {
   const now = Date.now();
   const cached = pairCache.get(cacheKey);
 
-  if (!forceFresh && cached && now - cached.ts < 40000 ) {
+  if (!forceFresh && cached && now - cached.ts < 10000 ) {
     return cached.data;
   }
 
@@ -1233,9 +1246,9 @@ async function resolveBestPair(query, forceFresh = false) {
   while (tries < 3) {
     try {
       if (isAddressLike(q)) {
-        const chainCandidates = q.startsWith("0x")
-          ? ["base", "ethereum"]
-          : ["solana"];
+     const chainCandidates = q.startsWith("0x")
+  ? ["base", "ethereum"]
+  : ["solana", "base", "ethereum"];  // Try all chains for Solana-like addresses
 const tokenResults = await Promise.all(
   chainCandidates.map(async (chainId) => {
     try {
