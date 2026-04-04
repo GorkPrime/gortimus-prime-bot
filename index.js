@@ -2926,18 +2926,17 @@ So if a token is high on Dex but lower here, that usually means the terminal thi
 if (data.startsWith("watchadd:")) {
   const payload = getShortCallbackPayload(data);
   if (!payload) {
-    return sendText(chatId, `Callback expired. Please rescan the token.`, buildMainMenuOnlyButton());
+    return sendText(
+      chatId,
+      `Callback expired. Please rescan the token.`,
+      buildMainMenuOnlyButton()
+    );
   }
 
-  const pair = await resolveTokenToBestPair(payload.chainId, payload.tokenAddress);
-  if (!pair) {
-    return sendText(chatId, `Could not resolve token for watchlist.`, buildMainMenuOnlyButton("refresh:watchlist"));
-  }
-
-  await addWatchlistItem(chatId, pair);
+  await addToWatchlist(chatId, payload.chainId, payload.tokenAddress);
   return sendText(
     chatId,
-    `👁 <b>Added to Watchlist</b>\n\n${escapeHtml(pair.baseSymbol || pair.baseAddress)}`,
+    `👁 Token added to watchlist.`,
     buildMainMenuOnlyButton("refresh:watchlist")
   );
 }
