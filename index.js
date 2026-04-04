@@ -1,17 +1,11 @@
-
 const TelegramBot = require("node-telegram-bot-api");
 const axios = require("axios");
-
-// Define isDevMode function FIRST
-const isDevMode = () => process.env.DEV_MODE === "true" && !!process.env.OWNER_USER_ID;
-
-
-
 const OpenAI = require("openai");
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY
 });
+
 const pairCache = new Map();
 
 function sleep(ms) {
@@ -21,6 +15,7 @@ function sleep(ms) {
 const sqlite3 = require("sqlite3").verbose();
 const path = require("path");
 const fs = require("fs");
+
 function isPrivateChat(msgOrQuery) {
   const chat =
     msgOrQuery?.chat ||
@@ -29,6 +24,7 @@ function isPrivateChat(msgOrQuery) {
 
   return chat?.type === "private";
 }
+
 // ================= ENV =================
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const HELIUS_API_KEY = process.env.HELIUS_API_KEY || "";
@@ -85,9 +81,12 @@ const latestBoostsCache = {
   data: []
 };
 
-const PROFILES_CACHE_TTL_MS = 120000; // 2 min
-const BOOSTS_CACHE_TTL_MS = 45000;    // 45 sec
-// ================= DEV MODE LOCK =================
+const PROFILES_CACHE_TTL_MS = 120000;
+const BOOSTS_CACHE_TTL_MS = 45000;
+
+// ================= DEV MODE =================
+const DEV_MODE = process.env.DEV_MODE === "true" && !!process.env.OWNER_USER_ID;
+const OWNER_USER_ID = process.env.OWNER_USER_ID || "";
 const OWNER_USER_ID = process.env.OWNER_USER_ID || "";
 // ================= DB HELPERS =================
 function getSessionMemory(chatId) {
