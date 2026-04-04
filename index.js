@@ -2933,14 +2933,25 @@ if (data.startsWith("watchadd:")) {
     );
   }
 
-  await addToWatchlist(chatId, payload.chainId, payload.tokenAddress);
+  // Resolve the payload to a full pair object
+  const pair = await resolveTokenToBestPair(payload.chainId, payload.tokenAddress);
+  if (!pair) {
+    return sendText(
+      chatId,
+      `Could not resolve token for watchlist.`,
+      buildMainMenuOnlyButton("refresh:watchlist")
+    );
+  }
+
+  // Call the correct function with the pair object
+  await addWatchlistItem(chatId, pair);  // ✅ FIXED
+  
   return sendText(
     chatId,
     `👁 Token added to watchlist.`,
     buildMainMenuOnlyButton("refresh:watchlist")
   );
 }
-
 if (data.startsWith("feedbackgood:")) {
   const payload = getShortCallbackPayload(data);
   if (!payload) {
