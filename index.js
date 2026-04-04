@@ -1,6 +1,6 @@
 const TelegramBot = require("node-telegram-bot-api");
 const axios = require("axios");
-const DEV_MODE = process.env.DEV_MODE === "true" && !!process.env.OWNER_USER_ID;
+const isDevMode = () => process.env.DEV_MODE === "true" && !!process.env.OWNER_USER_ID;
 const OpenAI = require("openai");
 
 const openai = new OpenAI({
@@ -828,9 +828,8 @@ async function ensureSubscribedOrBlock(msgOrQuery) {
 
 // ================= MENUS =================
 function getDevModeStatus() {
-  return DEV_MODE ? "🔴 DEV: ON" : "🟢 PROD: ON";
+  return isDevMode() ? "🔴 DEV: ON" : "🟢 PROD: ON";
 }
-
 function buildMainMenu() {
   const growthRow = BOT_USERNAME
     ? [{ text: "🚀 Invite Friends", callback_data: "invite_friends" }]
