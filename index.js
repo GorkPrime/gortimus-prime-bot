@@ -5,7 +5,7 @@ const axios = require("axios");
 // Define isDevMode function FIRST
 const isDevMode = () => process.env.DEV_MODE === "true" && !!process.env.OWNER_USER_ID;
 
-const OpenAI = require("openai");
+
 
 const OpenAI = require("openai");
 
