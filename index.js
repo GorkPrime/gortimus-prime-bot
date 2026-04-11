@@ -2745,11 +2745,11 @@ async function getTelegramPhotoUrl(photo) {
 
   return `https://api.telegram.org/file/bot${BOT_TOKEN}/${file.file_path}`;
 }
-bot.onText(/\/start/, async (msg) => {
+bot.on("message", async (msg) => {
   try {
     if (!isPrivateChat(msg)) return;
     if (!msg?.from?.id || !msg?.chat?.id) return;
-    if (msg.text && msg.text.startsWith("/start")) return; // handled by bot.onText(/\/start/)
+    if (msg.text && msg.text.startsWith("/")) return; // commands handled by their own handlers
 
     const ok = await ensureSubscribedOrBlock(msg);
     await upsertUserFromMessage(msg, ok ? 1 : 0);
