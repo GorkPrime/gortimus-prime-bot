@@ -112,6 +112,15 @@ const MOVERS_TOKEN_ALERT_COOLDOWN_MS = 5 * 60 * 1000; // 5-min per token
 const MOVERS_PRICE_CHANGE_H1_PCT = 30;  // ≥30% 1-hour gain triggers mover alert
 const MOVERS_PRICE_CHANGE_M5_PCT = 15;  // ≥15% 5-min gain triggers mover alert
 const MOVERS_MIN_LIQ_USD = 10000;       // minimum liquidity for credibility
+const DEFENSE_SCAN_PHASES = [
+  "🧬 Reading contract structure...",
+  "🛰 Checking liquidity signals...",
+  "🐋 Tracking holder concentration...",
+  "🤖 Detecting sniper behavior...",
+  "🧠 Searching for bundle patterns...",
+  "🧨 Testing trap exposure...",
+  "🛡 Building Defense Verdict..."
+];
 
 // Watchlist monitor thresholds
 const WATCHLIST_ALERT_COOLDOWN_S = 5 * 60;       // 5-min cooldown per item between alerts
@@ -897,6 +906,60 @@ async function checkDevWalletReputation(walletAddress, chainId) {
   }
 }
 
+async function checkFlaggedWallets(wallets, chainId) {
+  const entries = Array.isArray(wallets) ? wallets : [];
+  if (!entries.length) return [];
+  const normalized = entries
+    .map((wallet) => String(wallet || "").trim().toLowerCase())
+    .filter(Boolean);
+  if (!normalized.length) return [];
+  try {
+    const placeholders = normalized.map(() => "?").join(",");
+    const rows = await all(
+      `SELECT * FROM flagged_wallets WHERE wallet_address IN (${placeholders}) AND (chain_id = ? OR chain_id = 'all')`,
+      [...normalized, String(chainId || "").toLowerCase()]
+    );
+    return Array.isArray(rows) ? rows : [];
+  } catch (_) {
+    return [];
+  }
+}
+
+async function saveRiskyWallet(wallet, chainId, reason, riskLevel) {
+  const safeWallet = String(wallet || "").trim().toLowerCase();
+  if (!safeWallet) return false;
+  const safeChain = String(chainId || "all").trim().toLowerCase() || "all";
+  const safeLevel = String(riskLevel || "low").trim().toLowerCase() || "low";
+  const safeReason = String(reason || "Detected pattern requires caution.");
+  const ts = nowTs();
+  try {
+    await run(
+      `INSERT INTO flagged_wallets (wallet_address, chain_id, risk_level, reason, reported_by, reports_count, last_updated, created_at)
+       VALUES (?, ?, ?, ?, 'gorktimus', 1, ?, ?)
+       ON CONFLICT(wallet_address, chain_id) DO UPDATE SET
+         risk_level = excluded.risk_level,
+         reason = excluded.reason,
+         reports_count = reports_count + 1,
+         last_updated = excluded.last_updated`,
+      [safeWallet, safeChain, safeLevel, safeReason, ts, ts]
+    );
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+function summarizeWalletReputation(flaggedMatches) {
+  const matches = Array.isArray(flaggedMatches) ? flaggedMatches : [];
+  if (!matches.length) return "";
+  const sample = matches.slice(0, 2).map((m) => {
+    const reason = String(m?.reason || "previously flagged").trim();
+    const level = String(m?.risk_level || "unknown").toUpperCase();
+    return `${level}: ${reason}`;
+  });
+  return `Known risky wallet behavior detected. This is a possible threat pattern and needs caution. ${sample.join(" | ")}`;
+}
+
 function computeRiskRank(score, devReputation, liquidityLockStatus) {
   // Start from the safety score and apply modifiers
   // Critical: score < 25 OR dev is critical
@@ -1187,6 +1250,34 @@ async function sendPhotoWithRetry(chatId, photo, opts, fileOpts = {}, attempts =
   throw lastErr;
 }
 
+async function editMessageWithRetry(chatId, messageId, text, keyboard = {}, attempts = 2) {
+  let lastErr;
+  for (let i = 1; i <= attempts; i++) {
+    try {
+      return await bot.editMessageText(text, {
+        chat_id: chatId,
+        message_id: messageId,
+        parse_mode: "HTML",
+        disable_web_page_preview: true,
+        ...keyboard
+      });
+    } catch (err) {
+      lastErr = err;
+      const msg = String(err?.message || "");
+      const retryable =
+        msg.includes("504") ||
+        msg.includes("Gateway Timeout") ||
+        msg.includes("429") ||
+        msg.includes("Too Many Requests") ||
+        msg.includes("ECONNRESET") ||
+        msg.includes("ETIMEDOUT");
+      if (!retryable || i === attempts) throw err;
+      await sleep(TELEGRAM_SEND_RETRY_MS * i);
+    }
+  }
+  throw lastErr;
+}
+
 async function answerCallbackSafe(queryId, text = "") {
   try {
     await bot.answerCallbackQuery(queryId, text ? { text } : {});
@@ -1245,6 +1336,29 @@ async function sendCard(chatId, text, keyboard = {}, imageUrl = "") {
     }
   }
   return sendText(chatId, safeText, keyboard);
+}
+
+async function sendScanProgress(chatId) {
+  return sendText(chatId, "⚡ Initializing Gorktimus Defense Scan...", buildMainMenuOnlyButton("scan_token"));
+}
+
+async function editScanProgress(chatId, messageId, text) {
+  try {
+    return await editMessageWithRetry(chatId, messageId, text, buildMainMenuOnlyButton("scan_token"));
+  } catch (_) {
+    return null;
+  }
+}
+
+async function runDefenseScanProgress(chatId) {
+  const message = await sendScanProgress(chatId);
+  const messageId = message?.message_id;
+  if (!messageId) return null;
+  for (const phase of DEFENSE_SCAN_PHASES) {
+    await sleep(180);
+    await editScanProgress(chatId, messageId, phase);
+  }
+  return messageId;
 }
 
 // ================= USER / SETTINGS =================
@@ -1673,13 +1787,22 @@ function buildWatchlistItemMenu(pair) {
 }
 
 function buildScanActionButtons(pair, query = "") {
-  const refreshQuery = encodeURIComponent(
-    String(query || pair.baseAddress || pair.baseSymbol || "").slice(0, 40)
-  );
-
   const watchAddCb = makeShortCallback("watchadd", {
     chainId: pair.chainId,
     tokenAddress: pair.baseAddress
+  });
+  const whyDangerousCb = makeShortCallback("scanwhy", {
+    chainId: pair.chainId,
+    tokenAddress: pair.baseAddress
+  });
+  const viewDataCb = makeShortCallback("scandata", {
+    chainId: pair.chainId,
+    tokenAddress: pair.baseAddress
+  });
+  const refreshCb = makeShortCallback("scanrefresh", {
+    chainId: pair.chainId,
+    tokenAddress: pair.baseAddress,
+    query: String(query || pair.baseAddress || pair.baseSymbol || "").slice(0, 80)
   });
 
   const feedbackGoodCb = makeShortCallback("feedbackgood", {
@@ -1701,7 +1824,14 @@ function buildScanActionButtons(pair, query = "") {
     reply_markup: {
       inline_keyboard: [
         [
-          { text: "👁 Add Watchlist", callback_data: watchAddCb },
+          { text: "🧠 Why dangerous?", callback_data: whyDangerousCb },
+          { text: "📊 View Data", callback_data: viewDataCb }
+        ],
+        [
+          { text: "⭐ Add Watchlist", callback_data: watchAddCb },
+          { text: "🔄 Refresh Scan", callback_data: refreshCb }
+        ],
+        [
           { text: "🔎 Scan Another", callback_data: "scan_token" }
         ],
         [
@@ -1710,9 +1840,6 @@ function buildScanActionButtons(pair, query = "") {
         [
           { text: "👍 Good Call", callback_data: feedbackGoodCb },
           { text: "👎 Bad Call", callback_data: feedbackBadCb }
-        ],
-        [
-          { text: "🔄 Refresh", callback_data: `refresh_scan:${refreshQuery}` }
         ],
         [
           { text: "🤖 Ask AI Assistant", callback_data: "ai_assistant" }
@@ -2449,7 +2576,7 @@ function buildGorktimusCall(pair, verdict) {
   return "Caution warranted. Structural concerns outweigh the opportunity here.";
 }
 
-function buildWhyItMatters(pair, verdict) {
+function buildLegacyWhyItMatters(pair, verdict) {
   const score = verdict.score;
   const liq = num(pair.liquidityUsd);
   const holderLabel = verdict.holderLabel;
@@ -2472,7 +2599,7 @@ function buildGorktimusVerdictSection(pair, verdict, communityScans = 0) {
   const riskLabel = getGorktimusRiskLabel(verdict.score, { isHoneypot });
   const action = getGorktimusAction(verdict.score, { isHoneypot });
   const call = buildGorktimusCall(pair, verdict);
-  const why = buildWhyItMatters(pair, verdict);
+  const why = buildLegacyWhyItMatters(pair, verdict);
   const ageMin = verdict.ageMin;
   const isEarlySignal = ageMin > 0 && ageMin < 10;
 
@@ -2497,6 +2624,280 @@ function buildGorktimusVerdictSection(pair, verdict, communityScans = 0) {
 
   lines.push(``, `⏱ <i>Last refreshed: now</i>`, ``, `━━━━━━━━━━━━━━━━━━━━━━━━`);
   return lines.join("\n");
+}
+
+function getDefenseRiskMeta(score) {
+  if (score >= 80) return { riskLevel: "SAFE", emoji: "✅" };
+  if (score >= 60) return { riskLevel: "WATCH", emoji: "⚠️" };
+  if (score >= 35) return { riskLevel: "RISKY", emoji: "🔴" };
+  return { riskLevel: "DANGER", emoji: "⛔" };
+}
+
+function buildDefenseBar(score) {
+  const safeScore = Math.max(0, Math.min(100, Math.round(num(score))));
+  const filled = Math.round(safeScore / 10);
+  const bar = `${"▓".repeat(filled)}${"░".repeat(10 - filled)}`;
+  return `🛡 Defense: ${bar} ${safeScore}%`;
+}
+
+function buildThreatMeter(score) {
+  const safeScore = Math.max(0, Math.min(100, Math.round(num(score))));
+  const threatScore = 100 - safeScore;
+  const filled = Math.round(threatScore / 10);
+  const bar = `${"▓".repeat(filled)}${"░".repeat(10 - filled)}`;
+  const level = threatScore >= 65 ? "HIGH" : threatScore >= 35 ? "MEDIUM" : "LOW";
+  return `🚨 Threat: ${bar} ${level}`;
+}
+
+function buildWarnings(pair, extraData = {}) {
+  const warnings = [];
+  const verdict = extraData?.riskVerdict || {};
+  const liquidity = num(pair?.liquidityUsd);
+  const marketCap = num(pair?.marketCap || pair?.fdv);
+  const volume = num(pair?.volumeH24);
+  const buys = num(pair?.buysM5);
+  const sells = num(pair?.sellsM5);
+  const totalTxns = buys + sells;
+  const ageMin = num(extraData?.ageMin ?? ageMinutesFromMs(pair?.pairCreatedAt));
+  const top5 = num(extraData?.holderTop5Pct ?? verdict?.holderTop5Pct);
+  const holderKnown = top5 > 0;
+  const liquidityLock = String(extraData?.liquidityLock?.status || verdict?.liquidityLock?.status || "unknown").toLowerCase();
+  const honeypotLabel = String(extraData?.honeypotLabel || verdict?.honeypotLabel || "").toLowerCase();
+  const sellTax = num(extraData?.sellTax ?? verdict?.sellTax, null);
+  const buyTax = num(extraData?.buyTax ?? verdict?.buyTax, null);
+  const flaggedMatches = Array.isArray(extraData?.flaggedMatches) ? extraData.flaggedMatches : [];
+  const growth = num(extraData?.organicGrowthScore, NaN);
+  const liqToMcap = marketCap > 0 ? liquidity / marketCap : 0;
+
+  if (holderKnown && top5 >= 75) warnings.push("🧨 Bundle / insider concentration detected in top holders.");
+  if (holderKnown && top5 >= 60) warnings.push("🐋 Holder concentration is elevated — whale control risk.");
+  if (ageMin > 0 && ageMin < 30 && buys >= 15 && sells <= 2) warnings.push("🤖 Sniper-heavy launch behavior detected.");
+  if (marketCap > 0 && liqToMcap > 0 && liqToMcap < 0.06) warnings.push("🧊 Liquidity is weak versus market cap — exit depth is thin.");
+  if (liquidity > 0 && volume > liquidity * 6 && buys >= 12 && sells <= 2) warnings.push("🔥 Wash-volume suspicion: volume looks loud vs real liquidity.");
+  if (honeypotLabel.includes("detected") || honeypotLabel.includes("high risk")) warnings.push("🚫 Honeypot/sell-risk warning from simulation signals.");
+  if ((Number.isFinite(sellTax) && sellTax >= 20) || (Number.isFinite(buyTax) && buyTax >= 20)) warnings.push("🚫 High token taxes can trap exits.");
+  if (liquidityLock === "unlocked") warnings.push("🩸 Liquidity is unlocked — rug-risk exposure is higher.");
+  if (liquidity > 0 && liquidity < 8000) warnings.push("🧨 Liquidity is very thin — sharp slippage and drain risk.");
+  if (ageMin > 0 && ageMin < 10) warnings.push("⚠️ Fresh launch instability: structure is not mature yet.");
+  if (flaggedMatches.length > 0 || verdict?.devReputation) warnings.push("⚠️ Wallet Reputation Warning: Known risky wallet behavior detected.");
+  if (Number.isFinite(growth) && growth < 35) warnings.push("📉 Weak organic holder growth signal — momentum may be manufactured.");
+  if (!Number.isFinite(growth) && ageMin >= 60 && totalTxns < 4) warnings.push("📉 Weak organic holder growth signal from low sustained activity.");
+  if (!marketCap || !liquidity || !volume) warnings.push("Data unavailable — confidence reduced.");
+
+  return warnings.slice(0, 6);
+}
+
+function buildPositiveSignals(pair, extraData = {}) {
+  const positives = [];
+  const verdict = extraData?.riskVerdict || {};
+  const liquidity = num(pair?.liquidityUsd);
+  const marketCap = num(pair?.marketCap || pair?.fdv);
+  const buys = num(pair?.buysM5);
+  const sells = num(pair?.sellsM5);
+  const ageMin = num(extraData?.ageMin ?? ageMinutesFromMs(pair?.pairCreatedAt));
+  const top5 = num(extraData?.holderTop5Pct ?? verdict?.holderTop5Pct);
+  const honeypotLabel = String(extraData?.honeypotLabel || verdict?.honeypotLabel || "").toLowerCase();
+  const liquidityLock = String(extraData?.liquidityLock?.status || verdict?.liquidityLock?.status || "unknown").toLowerCase();
+  const liqToMcap = marketCap > 0 ? liquidity / marketCap : 0;
+  const flaggedMatches = Array.isArray(extraData?.flaggedMatches) ? extraData.flaggedMatches : [];
+
+  if (liquidity >= 50000) positives.push("🧊 Liquidity depth is stronger than average for this class.");
+  if (marketCap > 0 && liqToMcap >= 0.12) positives.push("🛡 Liquidity-to-market-cap structure looks healthier.");
+  if (top5 > 0 && top5 <= 45) positives.push("🐋 Holder concentration looks more distributed.");
+  if (buys + sells >= 8 && sells > 0 && buys / sells <= 1.8 && buys / sells >= 0.7) positives.push("📡 Two-sided flow looks more organic.");
+  if (liquidityLock === "locked") positives.push("🧬 Liquidity appears locked.");
+  if (honeypotLabel && !honeypotLabel.includes("detected") && !honeypotLabel.includes("high risk")) positives.push("🚨 No direct honeypot trigger detected from available checks.");
+  if (ageMin >= 60 && liquidity >= 30000 && buys + sells >= 8 && buys / Math.max(sells, 1) <= 1.5 && buys / Math.max(sells, 1) >= 0.7) {
+    positives.push("✅ Age + liquidity + balanced flow suggest a more organic structure.");
+  }
+  if (flaggedMatches.length === 0 && !verdict?.devReputation) positives.push("🧠 No previously flagged wallets matched in current inputs.");
+
+  return positives.slice(0, 5);
+}
+
+function detectMainThreat(pair, extraData = {}) {
+  const warnings = buildWarnings(pair, extraData);
+  if (warnings.length) return warnings[0].replace(/^[^\s]+\s/, "");
+  return "No major threat detected from available data.";
+}
+
+function detectTrapType(pair, extraData = {}) {
+  const verdict = extraData?.riskVerdict || {};
+  const ageMin = num(extraData?.ageMin ?? ageMinutesFromMs(pair?.pairCreatedAt));
+  const liquidity = num(pair?.liquidityUsd);
+  const marketCap = num(pair?.marketCap || pair?.fdv);
+  const buys = num(pair?.buysM5);
+  const sells = num(pair?.sellsM5);
+  const volume = num(pair?.volumeH24);
+  const top5 = num(extraData?.holderTop5Pct ?? verdict?.holderTop5Pct);
+  const liqToMcap = marketCap > 0 ? liquidity / marketCap : 0;
+  const honeypotLabel = String(extraData?.honeypotLabel || verdict?.honeypotLabel || "").toLowerCase();
+  const liquidityLock = String(extraData?.liquidityLock?.status || verdict?.liquidityLock?.status || "unknown").toLowerCase();
+  const flaggedMatches = Array.isArray(extraData?.flaggedMatches) ? extraData.flaggedMatches : [];
+  const score = num(extraData?.defenseScore, 0);
+
+  if (honeypotLabel.includes("detected") || honeypotLabel.includes("high risk")) return "🚫 Honeypot Hazard";
+  if (liquidityLock === "unlocked" && flaggedMatches.length > 0) return "🩸 Slow Rug Setup";
+  if (top5 >= 75 && ageMin > 0 && ageMin <= 60) return "🧨 Bundle Beast";
+  if (top5 >= 60) return "🐋 Whale-Controlled Setup";
+  if (ageMin > 0 && ageMin < 10) return "⚠️ Fresh Launch Instability";
+  if (ageMin > 0 && ageMin < 30 && buys >= 15 && sells <= 2) return "🤖 Sniper Nest";
+  if (liquidity > 0 && marketCap > 0 && liqToMcap < 0.06) return "🧊 Liquidity Mirage";
+  if (liquidity > 0 && volume > liquidity * 6 && buys >= 12 && sells <= 2) return "🔥 Fake Flame Volume";
+  if (score >= 80) return "✅ Organic Structure";
+  return "🕳 Exit Liquidity Arena";
+}
+
+function calculateDefenseScore(pair, extraData = {}) {
+  const verdict = extraData?.riskVerdict || {};
+  const liquidity = num(pair?.liquidityUsd);
+  const marketCap = num(pair?.marketCap || pair?.fdv);
+  const volume = num(pair?.volumeH24);
+  const buys = num(pair?.buysM5);
+  const sells = num(pair?.sellsM5);
+  const ageMin = num(extraData?.ageMin ?? ageMinutesFromMs(pair?.pairCreatedAt));
+  const top5 = num(extraData?.holderTop5Pct ?? verdict?.holderTop5Pct);
+  const liqToMcap = marketCap > 0 ? liquidity / marketCap : 0;
+  const honeypotLabel = String(extraData?.honeypotLabel || verdict?.honeypotLabel || "").toLowerCase();
+  const liquidityLock = String(extraData?.liquidityLock?.status || verdict?.liquidityLock?.status || "unknown").toLowerCase();
+  const flaggedMatches = Array.isArray(extraData?.flaggedMatches) ? extraData.flaggedMatches : [];
+  const hasMissing = !liquidity || !marketCap || !volume;
+
+  let score = 72;
+  if (num(verdict?.score) > 0) score = Math.max(30, Math.min(90, Math.round(num(verdict.score) * (100 / 99))));
+
+  if (top5 >= 75) score -= 20;
+  else if (top5 >= 60) score -= 12;
+  else if (top5 > 0 && top5 <= 45) score += 5;
+
+  if (ageMin > 0 && ageMin < 10) score -= 14;
+  else if (ageMin >= 60) score += 4;
+
+  if (ageMin > 0 && ageMin < 30 && buys >= 15 && sells <= 2) score -= 10;
+  if (marketCap > 0 && liqToMcap > 0 && liqToMcap < 0.06) score -= 12;
+  else if (marketCap > 0 && liqToMcap >= 0.12) score += 4;
+
+  if (liquidity > 0 && volume > liquidity * 6 && buys >= 12 && sells <= 2) score -= 8;
+
+  if (honeypotLabel.includes("detected") || honeypotLabel.includes("high risk")) score -= 35;
+  if (Number.isFinite(num(verdict?.sellTax, NaN)) && num(verdict?.sellTax, 0) >= 20) score -= 12;
+
+  if (liquidityLock === "unlocked") score -= 10;
+  else if (liquidityLock === "locked") score += 5;
+
+  if (flaggedMatches.length > 0) score -= Math.min(18, flaggedMatches.length * 6);
+  if (verdict?.devReputation) score -= 8;
+
+  if (buys + sells >= 8 && sells > 0 && buys / sells <= 1.8 && buys / sells >= 0.7) score += 4;
+  if (hasMissing) score -= 8;
+
+  return Math.max(0, Math.min(100, Math.round(score)));
+}
+
+function buildRecommendedAction(verdict) {
+  if (verdict.riskLevel === "SAFE") return "Trend is cleaner than average. Enter only with disciplined sizing and stops.";
+  if (verdict.riskLevel === "WATCH") return "Watch closely and size small until more confirmation appears.";
+  if (verdict.riskLevel === "RISKY") return "High caution. Only speculative size if you can handle fast downside.";
+  return "Avoid entry for now. Risk profile suggests likely trap exposure.";
+}
+
+function buildWhyItMatters(verdict) {
+  if (verdict.riskLevel === "SAFE") return "Core structure is healthier, so odds of immediate trap behavior are lower than usual.";
+  if (verdict.riskLevel === "WATCH") return "Some good signals exist, but unresolved risks can flip the setup quickly.";
+  if (verdict.riskLevel === "RISKY") return "Multiple structural risks are stacking. One bad move can trap exits fast.";
+  return "Trap signatures are clustering. This setup can turn you into exit liquidity without warning.";
+}
+
+function buildDefenseVerdict(pair, extraData = {}) {
+  const defenseScore = calculateDefenseScore(pair, extraData);
+  const riskMeta = getDefenseRiskMeta(defenseScore);
+  const trapType = detectTrapType(pair, { ...extraData, defenseScore });
+  const mainThreat = detectMainThreat(pair, extraData);
+  const warnings = buildWarnings(pair, extraData);
+  const positiveSignals = buildPositiveSignals(pair, extraData);
+  const baseVerdict = {
+    defenseScore,
+    riskLevel: riskMeta.riskLevel,
+    mainThreat,
+    trapType,
+    warnings,
+    positiveSignals,
+    recommendedAction: "",
+    whyItMatters: "",
+    plainEnglishSummary: ""
+  };
+  baseVerdict.recommendedAction = buildRecommendedAction(baseVerdict);
+  baseVerdict.whyItMatters = buildWhyItMatters(baseVerdict);
+  baseVerdict.plainEnglishSummary =
+    baseVerdict.riskLevel === "SAFE"
+      ? "Structure looks cleaner than most meme launches right now."
+      : baseVerdict.riskLevel === "WATCH"
+        ? "Mixed structure — could work, but caution is required."
+        : baseVerdict.riskLevel === "RISKY"
+          ? "Risk is elevated and trap conditions are partially active."
+          : "Danger signals are active. Probability of getting trapped is high.";
+  return baseVerdict;
+}
+
+function buildLaunchTimelineSection(pair, verdict) {
+  const ageMin = num(ageMinutesFromMs(pair?.pairCreatedAt), 0);
+  if (!ageMin) return "";
+  const lines = [
+    `⏱ <b>Launch Timeline</b>`,
+    `0-10m: Fresh launch instability`,
+    `10-30m: Holder structure forming`,
+    `30m-1h: Early wallets revealing behavior`,
+    `1h+: Stronger confidence possible`
+  ];
+  if (ageMin < 10) {
+    lines.push(`⚠️ Structure is not mature yet. Early candles can be manipulated.`);
+  } else if (ageMin >= 60 && verdict.riskLevel !== "DANGER") {
+    lines.push(`✅ Structure has had time to mature — confidence can improve with stable flow.`);
+  }
+  return lines.join("\n");
+}
+
+function formatDefenseVerdictCard(verdict, pair, extraData = {}) {
+  const statusEmoji = verdict.riskLevel === "SAFE" ? "✅" : verdict.riskLevel === "WATCH" ? "⚠️" : verdict.riskLevel === "RISKY" ? "🔴" : "⛔";
+  const warningLines = verdict.warnings.length ? verdict.warnings.map((w) => `- ${escapeHtml(w)}`) : ["- Data unavailable — confidence reduced."];
+  const positiveLines = verdict.positiveSignals.length ? verdict.positiveSignals.map((s) => `- ${escapeHtml(s)}`) : ["- No strong positive structure detected yet."];
+  const timeline = buildLaunchTimelineSection(pair, verdict);
+
+  return [
+    `🛡 <b>GORKTIMUS DEFENSE VERDICT</b>`,
+    ``,
+    `Status: ${statusEmoji} <b>${verdict.riskLevel}</b>`,
+    `Defense Score: ${verdict.defenseScore}/100`,
+    `Threat Meter: ${escapeHtml(buildThreatMeter(verdict.defenseScore).replace("🚨 ", ""))}`,
+    `Main Threat: ${escapeHtml(verdict.mainThreat)}`,
+    `Trap Type: ${escapeHtml(verdict.trapType)}`,
+    ``,
+    `⚡ <b>Action:</b>`,
+    `${escapeHtml(verdict.recommendedAction)}`,
+    ``,
+    `🧠 <b>Why It Matters:</b>`,
+    `${escapeHtml(verdict.whyItMatters)}`,
+    ``,
+    `📊 <b>Core Data</b>`,
+    `Price: <b>${shortUsd(pair.priceUsd)}</b>`,
+    `Liquidity: <b>${shortUsd(pair.liquidityUsd)}</b>`,
+    `Market Cap: <b>${shortUsd(pair.marketCap || pair.fdv)}</b>`,
+    `Volume 24h: <b>${shortUsd(pair.volumeH24)}</b>`,
+    `Age: <b>${escapeHtml(ageFromMs(pair.pairCreatedAt))}</b>`,
+    `Buys/Sells 5m: <b>${num(pair.buysM5)} / ${num(pair.sellsM5)}</b>`,
+    timeline ? `` : "",
+    timeline ? timeline : "",
+    ``,
+    `🚨 <b>Warnings</b>`,
+    ...warningLines,
+    ``,
+    `✅ <b>Positive Signals</b>`,
+    ...positiveLines,
+    ``,
+    `🛡 <b>Defense Bar:</b> ${escapeHtml(buildDefenseBar(verdict.defenseScore).replace("🛡 ", ""))}`,
+    `🚨 <b>Threat Bar:</b> ${escapeHtml(buildThreatMeter(verdict.defenseScore).replace("🚨 ", ""))}`,
+    extraData?.walletReputationSummary ? `⚠️ <b>Wallet Reputation Warning:</b>\n${escapeHtml(extraData.walletReputationSummary)}` : ""
+  ].filter(Boolean).join("\n");
 }
 
 function buildShareText(pair, verdict, dexUrl = "") {
@@ -2554,6 +2955,7 @@ async function buildRiskVerdict(pair, userId = null) {
   let holderTop5Pct = 0;
   let isHoneypot = null;
   let sourceChecks = { available: 1, expected: 4 };
+  let largestWallets = [];
 
   // Freeze authority status (chain-specific, fetched below)
   let freezeStatus = { freezable: null, label: "🧊 ❓ Unknown" };
@@ -2568,6 +2970,7 @@ if (chain === "solana") {
     ]).catch(() => ({ freezable: null, label: "🧊 ❓ Unknown" }))
   ]);
   const safeLargestAccounts = Array.isArray(largestAccounts) ? largestAccounts : [];
+  largestWallets = safeLargestAccounts.map((acc) => acc?.address).filter(Boolean).slice(0, 12);
   const holderInfo = analyzeSolanaHolderConcentration(safeLargestAccounts);
 
   holderLabel = holderInfo.label;
@@ -2638,6 +3041,10 @@ const [honeypotData, topHoldersData, etherscanData] = await Promise.all([
       holderScore = holderInfo.score;
       holderDetail = holderInfo.detail;
       holderTop5Pct = holderInfo.top5Pct;
+      largestWallets = (Array.isArray(topHoldersData?.holders) ? topHoldersData.holders : [])
+        .map((h) => h?.address || h?.holder || h?.wallet || h?.owner)
+        .filter(Boolean)
+        .slice(0, 12);
     }
 
     if (etherscanData) {
@@ -2733,6 +3140,7 @@ const [honeypotData, topHoldersData, etherscanData] = await Promise.all([
     holderLabel,
     holderDetail,
     holderTop5Pct,
+    largestWallets,
     confidenceMeta,
     behavior,
     buyTax,
@@ -2745,49 +3153,46 @@ const [honeypotData, topHoldersData, etherscanData] = await Promise.all([
 }
 
 async function buildScanCard(pair, heading, userId = null) {
-  const verdict = await buildRiskVerdict(pair, userId);
+  const riskVerdict = await buildRiskVerdict(pair, userId);
   const dexUrl = makeDexUrl(pair.chainId, pair.pairAddress, pair.url);
   const birdeyeUrl = makeBirdeyeUrl(pair.chainId, pair.baseAddress);
   const geckoUrl = makeGeckoUrl(pair.chainId, pair.pairAddress);
   const communityScans = await getTokenCommunityScans(pair.chainId, pair.baseAddress).catch(() => 0);
-  const verdictSection = buildGorktimusVerdictSection(pair, verdict, communityScans);
+  const candidateWallets = [
+    pair?.baseAddress,
+    ...(Array.isArray(riskVerdict?.largestWallets) ? riskVerdict.largestWallets : [])
+  ]
+    .map((w) => String(w || "").trim())
+    .filter(Boolean)
+    .slice(0, 20);
+  const flaggedMatches = await checkFlaggedWallets(candidateWallets, pair.chainId).catch(() => []);
+  const walletReputationSummary = summarizeWalletReputation(flaggedMatches);
+  const defenseVerdict = buildDefenseVerdict(pair, {
+    riskVerdict,
+    ageMin: riskVerdict.ageMin,
+    holderTop5Pct: riskVerdict.holderTop5Pct,
+    honeypotLabel: riskVerdict.honeypotLabel,
+    buyTax: riskVerdict.buyTax,
+    sellTax: riskVerdict.sellTax,
+    liquidityLock: riskVerdict.liquidityLock,
+    flaggedMatches
+  });
+  if (communityScans > 0 && defenseVerdict.positiveSignals.length < 5) {
+    defenseVerdict.positiveSignals.push(`👥 Community interest: ${communityScans} unique scans in 24h.`);
+  }
+  const verdictSection = formatDefenseVerdictCard(defenseVerdict, pair, {
+    riskVerdict,
+    walletReputationSummary
+  });
 
   return [
-    `🧠 <b>Gorktimus Intelligence Terminal</b>`,
-    ``,
     verdictSection,
     ``,
-    `${heading}`,
+    `${heading} • ${escapeHtml(humanChain(pair.chainId))}`,
     ``,
     `🪙 <b>${escapeHtml(pair.baseName || pair.baseSymbol || "Unknown")}</b> (${escapeHtml(pair.baseSymbol || "N/A")})`,
-    `⛓ <b>${escapeHtml(humanChain(pair.chainId))}</b>`,
     `📍 <code>${escapeHtml(pair.baseAddress || "")}</code>`,
     `🔗 Pair: <code>${escapeHtml(shortAddr(pair.pairAddress || "", 8))}</code>`,
-    ``,
-    `🛡 <b>Safety Score:</b> ${verdict.score}/99`,
-    `📌 <b>Grade:</b> ${escapeHtml(verdict.grade)}`,
-    `🎯 <b>Confidence:</b> ${escapeHtml(verdict.confidenceMeta.confidence)} (${escapeHtml(verdict.confidenceMeta.checksText)})`,
-    verdict.confidenceMeta.confidence === "Low" ? `⚠️ <i>Limited data available — token may be too new or partially indexed.</i>` : ``,
-    ``,
-    `⚠️ <b>Dev Wallet Risk:</b> ${escapeHtml(riskRankEmoji(verdict.riskRank))}`,
-    ``,
-    `💧 <b>Liquidity:</b> ${shortUsd(pair.liquidityUsd)} • ${escapeHtml(verdict.liquidity.label)}`,
-    `${escapeHtml(verdict.liquidityLock.label)}`,
-    `${escapeHtml(verdict.freezeStatus.label)}`,
-    `📊 <b>24H Volume:</b> ${shortUsd(pair.volumeH24)} • ${escapeHtml(verdict.volume.label)}`,
-    `⚡ <b>Flow:</b> ${escapeHtml(verdict.flow.label)} | Buys ${num(pair.buysM5)} / Sells ${num(pair.sellsM5)}`,
-    `⏳ <b>Age:</b> ${escapeHtml(ageFromMs(pair.pairCreatedAt))} • ${escapeHtml(verdict.age.label)}`,
-    `🏦 <b>Market Cap:</b> ${shortUsd(pair.marketCap || pair.fdv)}`,
-    ``,
-    `🔍 <b>Transparency:</b> ${escapeHtml(verdict.transparencyLabel)}`,
-    `🧪 <b>Trap / Honeypot:</b> ${escapeHtml(verdict.honeypotLabel)}`,
-    `👥 <b>Holder Structure:</b> ${escapeHtml(verdict.holderLabel)}`,
-    `🧠 <b>Behavior:</b> ${escapeHtml(verdict.behavior.detail)}`,
-    verdict.devReputation
-      ? `🚩 <b>Dev Wallet:</b> ${escapeHtml((verdict.devReputation.risk_level || "").toUpperCase())} — ${escapeHtml(verdict.devReputation.reason || "Flagged in scam database")}`
-      : ``,
-    ``,
-    `📌 <b>Recommendation:</b> ${escapeHtml(verdict.recommendation)}`,
     ``,
     `🌐 Dex: ${dexUrl || "N/A"}`,
     `🐦 Birdeye: ${birdeyeUrl || "N/A"}`,
@@ -3308,21 +3713,17 @@ function detectInputType(text) {
   };
 }
 async function runTokenScan(chatId, query, userId = null) {
-  await sendText(
-    chatId,
-    `🧠 <b>Gorktimus Intelligence Terminal</b>\n\n🔎 <b>Scanning</b>\n\nPulling live structure and risk data for <b>${escapeHtml(query)}</b>...`,
-    buildMainMenuOnlyButton("scan_token")
-  );
-const inputInfo = detectInputType(query);
+  const progressMessageId = await runDefenseScanProgress(chatId).catch(() => null);
+  const inputInfo = detectInputType(query);
 
-if (inputInfo.type === "ticker") {
-  // Warn about ambiguity but still attempt the lookup — don't hard-stop
-  await sendText(
-    chatId,
-    `🧠 <b>Gorktimus Intelligence Terminal</b>\n\n⚠️ <b>Ticker search — attempting match</b>\n\nMultiple coins can share the same ticker. Running best-match search now...`,
-    buildMainMenuOnlyButton("scan_token")
-  );
-}
+  if (inputInfo.type === "ticker") {
+    // Warn about ambiguity but still attempt the lookup — don't hard-stop
+    await sendText(
+      chatId,
+      `🧠 <b>Gorktimus Intelligence Terminal</b>\n\n⚠️ <b>Ticker search — attempting match</b>\n\nMultiple coins can share the same ticker. Running best-match search now...`,
+      buildMainMenuOnlyButton("scan_token")
+    );
+  }
   const pair = await resolveBestPair(query, false);
 
   if (userId) {
@@ -3343,7 +3744,15 @@ if (inputInfo.type === "ticker") {
       noMatchMsg = `🧠 <b>Gorktimus Intelligence Terminal</b>\n\n🔎 <b>Token Scan</b>\n\n⚠️ Could not resolve <b>${escapeHtml(query)}</b> as a token.\n\nTry sending a <b>contract address</b>, ticker symbol, or DexScreener link for best results.`;
     }
 
-    await sendText(chatId, noMatchMsg, buildMainMenuOnlyButton("scan_token"));
+    if (progressMessageId) {
+      try {
+        await editMessageWithRetry(chatId, progressMessageId, noMatchMsg, buildMainMenuOnlyButton("scan_token"));
+      } catch (_) {
+        await sendText(chatId, noMatchMsg, buildMainMenuOnlyButton("scan_token"));
+      }
+    } else {
+      await sendText(chatId, noMatchMsg, buildMainMenuOnlyButton("scan_token"));
+    }
     return;
   }
 
@@ -3353,7 +3762,16 @@ if (inputInfo.type === "ticker") {
   const card = await cardPromise;
   snapshotPromise.catch(() => {});
 
-  await sendCard(chatId, card, buildScanActionButtons(pair, query), "");
+  const scanButtons = buildScanActionButtons(pair, query);
+  if (progressMessageId) {
+    try {
+      await editMessageWithRetry(chatId, progressMessageId, card, scanButtons);
+    } catch (_) {
+      await sendCard(chatId, card, scanButtons, "");
+    }
+  } else {
+    await sendCard(chatId, card, scanButtons, "");
+  }
   await addUserScanHistory(userId, chatId, query, pair).catch(() => {});
   const currentMemory = getSessionMemory(chatId);
   const scanSnapshot = {
@@ -3645,6 +4063,55 @@ async function handleWatchOpen(chatId, userId, chainId, tokenAddress) {
   const imageUrl = await fetchTokenProfileImage(pair.chainId, pair.baseAddress, pair);
   const text = await buildScanCard(pair, "👁 <b>Watchlist Item</b>", userId);
   await sendCard(chatId, text, buildWatchlistItemMenu(pair), imageUrl);
+}
+
+function explainWarningForBeginners(warning) {
+  const text = String(warning || "").toLowerCase();
+  if (text.includes("honeypot") || text.includes("sell-risk") || text.includes("tax")) {
+    return "This token can make buying easy but selling hard or expensive. That can trap your money in the trade.";
+  }
+  if (text.includes("liquidity") && text.includes("thin")) {
+    return "Liquidity is the exit door. If it is too small, even normal selling can crash price and block clean exits.";
+  }
+  if (text.includes("bundle") || text.includes("holder concentration") || text.includes("whale")) {
+    return "Too much supply is controlled by a few wallets. If they sell, smaller holders can get dumped on fast.";
+  }
+  if (text.includes("sniper")) {
+    return "Bots likely grabbed launch supply early. That can create fake strength before a fast reversal.";
+  }
+  if (text.includes("unlocked") || text.includes("rug")) {
+    return "Unlocked liquidity means funds can be pulled. That is a classic rug setup risk.";
+  }
+  if (text.includes("fresh launch")) {
+    return "Very new launches are unstable. Early candles are easy to manipulate before structure forms.";
+  }
+  if (text.includes("data unavailable")) {
+    return "Some key data is missing right now. Lower visibility means higher uncertainty.";
+  }
+  return "This warning shows a detected risk pattern. It does not guarantee failure, but it needs caution before entering.";
+}
+
+function buildRawDataCard(pair, riskVerdict, defenseVerdict) {
+  return [
+    `📊 <b>Defense Data View</b>`,
+    ``,
+    `🪙 <b>${escapeHtml(pair.baseSymbol || pair.baseName || "Token")}</b> • ${escapeHtml(humanChain(pair.chainId))}`,
+    `📍 <code>${escapeHtml(pair.baseAddress || "")}</code>`,
+    ``,
+    `Price: <b>${shortUsd(pair.priceUsd)}</b>`,
+    `Liquidity: <b>${shortUsd(pair.liquidityUsd)}</b>`,
+    `Market Cap: <b>${shortUsd(pair.marketCap || pair.fdv)}</b>`,
+    `Volume 24h: <b>${shortUsd(pair.volumeH24)}</b>`,
+    `Age: <b>${escapeHtml(ageFromMs(pair.pairCreatedAt))}</b>`,
+    `Buys/Sells 5m: <b>${num(pair.buysM5)} / ${num(pair.sellsM5)}</b>`,
+    ``,
+    `🧬 Contract: <b>${escapeHtml(riskVerdict.transparencyLabel || "Unknown")}</b>`,
+    `🚨 Honeypot: <b>${escapeHtml(riskVerdict.honeypotLabel || "Unknown")}</b>`,
+    `🐋 Holders: <b>${escapeHtml(riskVerdict.holderLabel || "Unknown")}</b>`,
+    `🧊 Liquidity Lock: <b>${escapeHtml(riskVerdict.liquidityLock?.status || "unknown")}</b>`,
+    `🛡 Defense Score: <b>${defenseVerdict.defenseScore}/100</b>`,
+    `Threat Meter: ${escapeHtml(buildThreatMeter(defenseVerdict.defenseScore))}`
+  ].join("\n");
 }
 
 async function handleRefresh(chatId, userId, key) {
@@ -4011,6 +4478,47 @@ So if a token is high on Dex but lower here, that usually means the terminal thi
       const payload = getShortCallbackPayload(data);
       if (!payload) return sendText(chatId, `Callback expired. Please rescan the token.`, buildMainMenuOnlyButton());
       return runTokenScan(chatId, payload.tokenAddress, userId);
+    }
+    if (data.startsWith("scanrefresh:")) {
+      const payload = getShortCallbackPayload(data);
+      if (!payload) return sendText(chatId, `Refresh callback expired. Please rescan the token.`, buildMainMenuOnlyButton("scan_token"));
+      return runTokenScan(chatId, payload.query || payload.tokenAddress, userId);
+    }
+    if (data.startsWith("scanwhy:")) {
+      const payload = getShortCallbackPayload(data);
+      if (!payload) return sendText(chatId, `Callback expired. Please rescan the token.`, buildMainMenuOnlyButton("scan_token"));
+      const pair = await resolveTokenToBestPair(payload.chainId, payload.tokenAddress).catch(() => null);
+      if (!pair) return sendText(chatId, `Could not resolve token for explanation.`, buildMainMenuOnlyButton("scan_token"));
+      const riskVerdict = await buildRiskVerdict(pair, userId).catch(() => null);
+      if (!riskVerdict) return sendText(chatId, `Data unavailable — confidence reduced.`, buildMainMenuOnlyButton("scan_token"));
+      const candidateWallets = [pair.baseAddress, ...(Array.isArray(riskVerdict.largestWallets) ? riskVerdict.largestWallets : [])];
+      const flaggedMatches = await checkFlaggedWallets(candidateWallets, pair.chainId).catch(() => []);
+      const defenseVerdict = buildDefenseVerdict(pair, { riskVerdict, flaggedMatches });
+      const topWarning = defenseVerdict.warnings[0] || "Data unavailable — confidence reduced.";
+      const beginner = explainWarningForBeginners(topWarning);
+      const message = [
+        `🧠 <b>Why dangerous?</b>`,
+        ``,
+        `Top warning: <b>${escapeHtml(topWarning)}</b>`,
+        ``,
+        `${escapeHtml(beginner)}`,
+        ``,
+        `${escapeHtml(defenseVerdict.plainEnglishSummary)}`
+      ].join("\n");
+      return sendText(chatId, message, buildScanActionButtons(pair, payload.query || payload.tokenAddress));
+    }
+    if (data.startsWith("scandata:")) {
+      const payload = getShortCallbackPayload(data);
+      if (!payload) return sendText(chatId, `Callback expired. Please rescan the token.`, buildMainMenuOnlyButton("scan_token"));
+      const pair = await resolveTokenToBestPair(payload.chainId, payload.tokenAddress).catch(() => null);
+      if (!pair) return sendText(chatId, `Could not resolve token for data view.`, buildMainMenuOnlyButton("scan_token"));
+      const riskVerdict = await buildRiskVerdict(pair, userId).catch(() => null);
+      if (!riskVerdict) return sendText(chatId, `Data unavailable — confidence reduced.`, buildMainMenuOnlyButton("scan_token"));
+      const candidateWallets = [pair.baseAddress, ...(Array.isArray(riskVerdict.largestWallets) ? riskVerdict.largestWallets : [])];
+      const flaggedMatches = await checkFlaggedWallets(candidateWallets, pair.chainId).catch(() => []);
+      const defenseVerdict = buildDefenseVerdict(pair, { riskVerdict, flaggedMatches });
+      const card = buildRawDataCard(pair, riskVerdict, defenseVerdict);
+      return sendText(chatId, card, buildScanActionButtons(pair, payload.query || payload.tokenAddress));
     }
 if (data.startsWith("watchadd:")) {
   const payload = getShortCallbackPayload(data);

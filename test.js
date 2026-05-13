@@ -787,6 +787,78 @@ async function main() {
     }
   });
 
+  console.log("\nDEFENSE TERMINAL V3 HELPERS");
+
+  function getDefenseRiskLevel(score) {
+    if (score >= 80) return "SAFE";
+    if (score >= 60) return "WATCH";
+    if (score >= 35) return "RISKY";
+    return "DANGER";
+  }
+
+  function buildDefenseBar(score) {
+    const safeScore = Math.max(0, Math.min(100, Math.round(Number(score) || 0)));
+    const filled = Math.round(safeScore / 10);
+    const bar = `${"▓".repeat(filled)}${"░".repeat(10 - filled)}`;
+    return `🛡 Defense: ${bar} ${safeScore}%`;
+  }
+
+  function buildThreatMeter(score) {
+    const safeScore = Math.max(0, Math.min(100, Math.round(Number(score) || 0)));
+    const threatScore = 100 - safeScore;
+    const filled = Math.round(threatScore / 10);
+    const bar = `${"▓".repeat(filled)}${"░".repeat(10 - filled)}`;
+    const level = threatScore >= 65 ? "HIGH" : threatScore >= 35 ? "MEDIUM" : "LOW";
+    return `🚨 Threat: ${bar} ${level}`;
+  }
+
+  await test("defense risk mapping follows SAFE/WATCH/RISKY/DANGER thresholds", () => {
+    assert.strictEqual(getDefenseRiskLevel(100), "SAFE");
+    assert.strictEqual(getDefenseRiskLevel(80), "SAFE");
+    assert.strictEqual(getDefenseRiskLevel(79), "WATCH");
+    assert.strictEqual(getDefenseRiskLevel(60), "WATCH");
+    assert.strictEqual(getDefenseRiskLevel(59), "RISKY");
+    assert.strictEqual(getDefenseRiskLevel(35), "RISKY");
+    assert.strictEqual(getDefenseRiskLevel(34), "DANGER");
+    assert.strictEqual(getDefenseRiskLevel(0), "DANGER");
+  });
+
+  await test("buildDefenseBar outputs 10-cell bar and percent text", () => {
+    const bar = buildDefenseBar(52);
+    assert.ok(bar.startsWith("🛡 Defense:"), "Should include defense prefix");
+    const cells = (bar.match(/[▓░]/g) || []).length;
+    assert.strictEqual(cells, 10, "Defense bar should always have 10 cells");
+    assert.ok(bar.endsWith("52%"), "Defense bar should include integer percent");
+  });
+
+  await test("buildThreatMeter outputs HIGH for low defense scores", () => {
+    const meter = buildThreatMeter(20);
+    assert.ok(meter.includes("🚨 Threat:"), "Should include threat prefix");
+    assert.ok(meter.endsWith("HIGH"), "Low defense score should map to HIGH threat");
+  });
+
+  await test("buildThreatMeter outputs LOW for strong defense scores", () => {
+    const meter = buildThreatMeter(90);
+    assert.ok(meter.endsWith("LOW"), "High defense score should map to LOW threat");
+  });
+
+  await test("scan action callbacks for new defense buttons remain under Telegram 64-byte limit", () => {
+    const callbackStore = new Map();
+    function makeShortCallback(action, payload) {
+      const id = Math.random().toString(36).slice(2, 9);
+      callbackStore.set(id, payload);
+      return `${action}:${id}`;
+    }
+    const cbs = [
+      makeShortCallback("scanwhy", { chainId: "solana", tokenAddress: "7tuPcPMUoDUxxb1j1NPjyjLXaqDwmxaW7mA2Y8Mbpump" }),
+      makeShortCallback("scandata", { chainId: "solana", tokenAddress: "7tuPcPMUoDUxxb1j1NPjyjLXaqDwmxaW7mA2Y8Mbpump" }),
+      makeShortCallback("scanrefresh", { chainId: "solana", tokenAddress: "7tuPcPMUoDUxxb1j1NPjyjLXaqDwmxaW7mA2Y8Mbpump", query: "gork" })
+    ];
+    for (const cb of cbs) {
+      assert.ok(Buffer.byteLength(cb, "utf8") <= 64, `Callback "${cb}" exceeds 64 bytes`);
+    }
+  });
+
   // ── Instance lock tests ──────────────────────────────────────────────────────
   console.log("\nINSTANCE LOCK");
 
@@ -1776,4 +1848,3 @@ main().catch((err) => {
   console.error("Test runner failed:", err);
   process.exit(1);
 });
-
